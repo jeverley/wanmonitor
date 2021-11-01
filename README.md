@@ -44,7 +44,7 @@ The service configuration is controlled through the config file:
 A valid WAN interface name should be specified for each wanmonitor config section.
 It is recommended that the ingress and egress target parateters are set in the 0.7-0.8 range (exact values will depend on your setup).
 
-**The values do not determing the link's maximum bandwith, they are used in the metric comparisons to account for rate jitter.**
+**The values do not determine the link's maximum bandwith, they are used in the metric comparisons to account for rate jitter.**
 
 Note that these should be set to configured to match the troughs of a saturated line rate as shown below:
 
