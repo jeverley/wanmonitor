@@ -3,8 +3,6 @@ Copyright 2021 Jack Everley
 Lua script for monitoring a wan interface and auto-adjusting its qdiscs' bandwidth for SQM
 Command line arguments:
 	required	-i	(--interface)	Used to specify the wan interface to monitor
-	optional	-s	(--status)		Used to specify a status file path
-	optional	-c	(--console)		Used to run attached to an interactive console
 ]]
 
 local jsonc = require("luci.jsonc")
@@ -15,7 +13,6 @@ local unistd = require("posix.unistd")
 
 local verbose
 local appendStatus
-local console
 local egress
 local ingress
 local interface
@@ -49,10 +46,6 @@ local previousTxBytes
 local previousEpoch
 
 local function log(priority, message)
-	if console then
-		print(priority .. ": " .. message)
-		return
-	end
 	syslog.openlog("wanmonitor", syslog.LOG_PID, syslog.LOG_DAEMON)
 	syslog.syslog(syslog[priority], message)
 	syslog.closelog()
@@ -658,26 +651,13 @@ local function pingLoop()
 end
 
 local function initialise()
-	console = readArg("c", "console")
-	if console and console ~= true then
-		log("LOG_ERR", "Properties must not be specified for the -c (--console) argument")
-		os.exit()
-	end
-
 	interface = readArg("i", "interface")
 	if type(interface) ~= "string" or interface == "" then
 		log("LOG_ERR", "An interface must be specified for the -i (--interface) argument")
 		os.exit()
 	end
-
-	statusFile = readArg("s", "status")
-	if statusFile == true then
-		log("LOG_ERR", "A filepath must be specified for the -s (--status) argument")
-		os.exit()
-	elseif not statusFile then
-		statusFile = "/var/wanmonitor." .. interface .. ".json"
-	end
-
+	
+	statusFile = "/var/wanmonitor." .. interface .. ".json"
 	pidFile = "/var/run/wanmonitor." .. interface .. ".pid"
 
 	local config = uciGet("wanmonitor", interface)
@@ -721,7 +701,7 @@ local function initialise()
 		interval = config.interval
 	end
 
-	if config.iptype and config.iptype ~= "ipv4" and config.iptype ~= "ipv6" then
+	if config.iptype and config.iptype ~= "ipv4" and config.iptype ~= "ipv6" and config.iptype ~= "ipv4v6" then
 		log("LOG_WARNING", "Invalid iptype specified for " .. interface)
 		config.iptype = nil
 	end
@@ -826,9 +806,7 @@ local function main()
 	signal.signal(signal.SIGHUP, exit)
 	signal.signal(signal.SIGTERM, exit)
 
-	if not console then
-		daemonise()
-	end
+	daemonise()
 	pid = unistd.getpid()
 	writeFile(pidFile, pid)
 	log("LOG_NOTICE", "Started for " .. interface .. " (" .. device .. ")")
