@@ -1,3 +1,5 @@
+Copyright 2021 Jack Everley
+
 # wanmonitor
 A set of scripts providing WAN interface monitoring and SQM autoscaling for OpenWrt routers.
 The main executable polls 
