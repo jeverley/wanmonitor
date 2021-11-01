@@ -8,7 +8,7 @@ The main lua executable currently supports the folling features:
 * Autorate of both ingress and egress (comparing metrics in each direction to determine the most likely cause of latency)
 * Support for monitoring multiple wan interfaces in parallel
 * Polling of multiple remote hosts during each statistics interval (using the oping binary)
-* Statistic intervals < 1 second
+* Statistic intervals less than 1 second
 * Automatic reconnect of non-responsive WAN interfaces
 * Automatic detection of SQM configuration changes
 * All configuration is managed using the standard OpenWrt configuration format
