@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright 2021 Jack Everley
 
 [ -n "$INTERFACE" ] || exit 0
 
