@@ -1,0 +1,13 @@
+
+config interface 'wan'
+	option enabled '0'
+	option reconnect '0'
+	option autorate '0'
+
+config interface 'wwan'
+	option enabled '1'
+	option ingressDevice 'br-lan'
+	option reconnect '1'
+	option autorate '1'
+	option egressTarget '0.8'
+	option ingressTarget '0.7'
