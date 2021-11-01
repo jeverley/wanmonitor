@@ -20,7 +20,7 @@ chmod +x /etc/init.d/wanmonitor
 
 Once the configuration file has been updated to match your local setup the service can be enabled and started by running the following commands from shell:
 ```shell
-service wanmonitor enables
+service wanmonitor enable
 service wanmonitor start
 ```
 
