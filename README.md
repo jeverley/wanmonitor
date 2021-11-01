@@ -20,7 +20,7 @@ The following OpenWrt packages must be installed:
 * oping
 * liboping
 * luaposix
-* luci-lib-jsonc
+* luci-lib-jsonc (part of the default install)
 
 Scipt files should be placed in the OpenWrt router filesystem according to the repo directory structure, ensure that the following files have been granted executable permission:
 * /etc/hotplug.d/iface/30-wanmonitor
