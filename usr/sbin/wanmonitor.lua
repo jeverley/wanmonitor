@@ -28,7 +28,6 @@ local dscp
 local hosts
 local interval
 local iptype
-local bandwidthTarget
 local maximumPersistence
 local pingPersistence
 local stablePersistence
@@ -746,7 +745,6 @@ local function initialise()
 		return
 	end
 
-	bandwidthTarget = 0.95
 	maximumPersistence = 0.25
 	pingPersistence = 0.99
 	stablePersistence = 0.9
@@ -777,13 +775,13 @@ local function initialise()
 	if tonumber(config.egressTarget) then
 		egress.bandwidthTarget = tonumber(config.egressTarget)
 	else
-		egress.bandwidthTarget = bandwidthTarget
+		egress.bandwidthTarget = 0.8
 	end
 
 	if tonumber(config.ingressTarget) then
 		ingress.bandwidthTarget = tonumber(config.ingressTarget)
 	else
-		ingress.bandwidthTarget = bandwidthTarget
+		ingress.bandwidthTarget = 0.7
 	end
 
 	maximumPersistence = maximumPersistence ^ interval
