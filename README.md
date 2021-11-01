@@ -51,7 +51,7 @@ Note that these should be configured to match the troughs of a saturated line ra
 
 ![image](https://user-images.githubusercontent.com/46714706/139727270-ac732c63-e33d-4d1b-abb5-711700062220.png)
 
-Good starting values are of 0.7 for ingress and 0.8 for egress.
+Good starting values are 0.7 for ingress and 0.8 for egress.
 
 Option | Type | Description | Examples | Default
 ------------ | ------------- | ------------- | ------------- | -------------
