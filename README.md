@@ -44,3 +44,37 @@ interval | decimal | Specifies the ping test interval in seconds (optional) | 0.
 hosts | list | Specify the remote hosts to ping tests (optional) || connectivitycheck.gstatic.com<br>www.msftconnecttest.com<br>ipv6.msftconnecttest.com<br>captive.apple.com
 iptype | string | Limit ping tests to a specific IP version (optional) | ipv4, ipv6 |
 verbose | boolean | Enable detailed output in the wanmonitor var status file (optional) | 0 or 1 | 0 (disabled)
+
+# wan interface statistics
+The service updates a JSON var file under the path /var/wanmonitor.{interface}.json which includes current rate and ping metrics.
+Example below:
+
+```json
+{
+  "ping": 48.56,
+  "device": "wwan0",
+  "egress": {
+    "change": 0,
+    "maximum": 115.47821693868875,
+    "device": "wwan0",
+    "peak": 2058.9358297866193,
+    "decreaseChance": 0,
+    "bandwidth": 1971.064,
+    "target": 1647.1486638292954,
+    "stable": 123.19589644945944,
+    "rate": 101.49652326663251
+  },
+  "ingress": {
+    "change": 3.407471957072835,
+    "maximum": 12762.418651098951,
+    "device": "br-lan",
+    "peak": 34640.78843586186,
+    "decreaseChance": 0,
+    "bandwidth": 27601.920000000002,
+    "target": 24248.5519051033,
+    "stable": 12299.174989053196,
+    "rate": 12762.418651098951
+  },
+  "interface": "wwan"
+}
+```
