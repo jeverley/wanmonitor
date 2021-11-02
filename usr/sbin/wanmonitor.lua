@@ -31,6 +31,7 @@ local iptype
 local maximumPersistence
 local pingPersistence
 local stablePersistence
+local stableSeconds
 local assuredPeriod
 local reconnect
 local autorate
@@ -381,7 +382,7 @@ local function calculateChange(qdisc)
 	if
 		ping < qdisc.ping.target
 		and qdisc.cooldown == 0
-		and (qdisc.ping.clear >= 10 or qdisc.ping.clear >= 2 and qdisc.stable > qdisc.bandwidth * 0.98)
+		and (qdisc.ping.clear >= 10 or qdisc.ping.clear >= stableSeconds and qdisc.stable > qdisc.bandwidth * 0.98)
 		and math.random(1, 100) <= 25
 	then
 		calculateIncrease(qdisc)
@@ -590,6 +591,7 @@ local function processPingOutput(line)
 		pingResponseTimes = {}
 		retriesRemaining = retries
 	elseif string.find(line, "Adding host .* failed: ") then
+		log("LOG_WARNING", line)
 		hostsCount = hostsCount - 1
 		pingStatus = 5
 	elseif string.find(line, "ping_send failed: No such device") then
@@ -602,6 +604,9 @@ local function processPingOutput(line)
 		pingStatus = 3
 	elseif string.find(line, "ping_send failed: ") then
 		pingStatus = 2
+	elseif string.find(line, "Invalid QoS argument:") then
+		log("LOG_ERR", line)
+		exit()
 	elseif string.find(line, "ping_sendto: Permission denied") then
 		log("LOG_ERR", "Unable to ping remote hosts on " .. interface .. " (" .. device .. ")")
 		exit()
@@ -655,7 +660,7 @@ local function initialise()
 		log("LOG_ERR", "An interface must be specified for the -i (--interface) argument")
 		os.exit()
 	end
-	
+
 	statusFile = "/var/wanmonitor." .. interface .. ".json"
 	pidFile = "/var/run/wanmonitor." .. interface .. ".pid"
 
@@ -696,8 +701,13 @@ local function initialise()
 		dscp = config.dscp
 	end
 
-	if tonumber(config.interval) and config.interval > 0 then
-		interval = config.interval
+	if config.interval then
+		config.interval = tonumber(config.interval)
+		if not config.interval or config.interval <= 0 then
+			log("LOG_WARNING", "Invalid interval config value specified for " .. interface)
+		else
+			interval = config.interval
+		end
 	end
 
 	if config.iptype and config.iptype ~= "ipv4" and config.iptype ~= "ipv6" and config.iptype ~= "ipv4v6" then
@@ -722,23 +732,47 @@ local function initialise()
 	end
 
 	if config.hosts then
-		hosts = config.hosts
+		if type(config.hosts ~= "table") then
+			log("LOG_WARNING", "Invalid hosts list specified for " .. interface)
+		else
+			hosts = config.hosts
+		end
 	end
 
 	if config.reconnect then
-		reconnect = toboolean(config.reconnect)
+		config.reconnect = toboolean(config.reconnect)
+		if config.reconnect == nil then
+			log("LOG_WARNING", "Invalid reconnect config value specified for " .. interface)
+		else
+			reconnect = config.reconnect
+		end
 	end
 
 	if config.autorate then
-		autorate = toboolean(config.autorate)
+		config.autorate = toboolean(config.autorate)
+		if config.autorate == nil then
+			log("LOG_WARNING", "Invalid autorate config value specified for " .. interface)
+		else
+			autorate = config.autorate
+		end
 	end
 
 	if config.verbose then
-		verbose = toboolean(config.verbose)
+		config.verbose = toboolean(config.verbose)
+		if config.verbose == nil then
+			log("LOG_WARNING", "Invalid verbose config value specified for " .. interface)
+		else
+			verbose = config.verbose
+		end
 	end
 
 	if config.appendStatus then
-		appendStatus = toboolean(config.appendStatus)
+		config.appendStatus = toboolean(config.appendStatus)
+		if config.appendStatus == nil then
+			log("LOG_WARNING", "Invalid appendStatus config value specified for " .. interface)
+		else
+			appendStatus = config.appendStatus
+		end
 	end
 
 	if not autorate then
@@ -748,46 +782,75 @@ local function initialise()
 	maximumPersistence = 0.25
 	pingPersistence = 0.99
 	stablePersistence = 0.9
-	assuredPeriod = 2
-
+	stableSeconds = 2
+	egress.bandwidthTarget = 0.8
+	ingress.bandwidthTarget = 0.7
 	egress.device = device
 
-	if toboolean(config.veth) then
-		ingress.device = "veth" .. string.sub(interface, 1, 11)
-	elseif not config.ingressDevice or device == config.ingressDevice then
+	if not config.ingressDevice or device == config.ingressDevice then
 		ingress.device = "ifb4" .. string.sub(device, 1, 11)
 	else
 		ingress.device = config.ingressDevice
 	end
 
-	if tonumber(config.maximumPersistence) then
-		maximumPersistence = tonumber(config.maximumPersistence)
+	if config.maximumPersistence then
+		config.maximumPersistence = tonumber(config.maximumPersistence)
+		if not config.maximumPersistence or config.maximumPersistence <= 0 or config.maximumPersistence > 1 then
+			log("LOG_WARNING", "Invalid maximumPersistence config value specified for " .. interface)
+		else
+			maximumPersistence = config.maximumPersistence
+		end
 	end
 
-	if tonumber(config.pingPersistence) then
-		pingPersistence = tonumber(config.pingPersistence)
+	if config.pingPersistence then
+		config.pingPersistence = tonumber(config.pingPersistence)
+		if not config.pingPersistence or config.pingPersistence <= 0 or config.pingPersistence > 1 then
+			log("LOG_WARNING", "Invalid pingPersistence config value specified for " .. interface)
+		else
+			pingPersistence = config.pingPersistence
+		end
 	end
 
-	if tonumber(config.stablePersistence) then
-		stablePersistence = tonumber(config.stablePersistence)
+	if config.stablePersistence then
+		config.stablePersistence = tonumber(config.stablePersistence)
+		if not config.stablePersistence or config.stablePersistence <= 0 or config.stablePersistence > 1 then
+			log("LOG_WARNING", "Invalid stablePersistence config value specified for " .. interface)
+		else
+			stablePersistence = config.stablePersistence
+		end
 	end
 
-	if tonumber(config.egressTarget) then
-		egress.bandwidthTarget = tonumber(config.egressTarget)
-	else
-		egress.bandwidthTarget = 0.8
+	if config.stableSeconds then
+		config.stableSeconds = tonumber(config.stableSeconds)
+		if not config.stableSeconds or config.stableSeconds <= 0 then
+			log("LOG_WARNING", "Invalid stableSeconds config value specified for " .. interface)
+		else
+			stableSeconds = config.stableSeconds
+		end
 	end
 
-	if tonumber(config.ingressTarget) then
-		ingress.bandwidthTarget = tonumber(config.ingressTarget)
-	else
-		ingress.bandwidthTarget = 0.7
+	if config.egressTarget then
+		config.egressTarget = tonumber(config.egressTarget)
+		if not config.egressTarget or config.egressTarget <= 0 or config.egressTarget > 1 then
+			log("LOG_WARNING", "Invalid egressTarget config value specified for " .. interface)
+		else
+			egress.bandwidthTarget = config.egressTarget
+		end
+	end
+
+	if config.ingressTarget then
+		config.ingressTarget = tonumber(config.ingressTarget)
+		if not config.ingressTarget or config.ingressTarget <= 0 or config.ingressTarget > 1 then
+			log("LOG_WARNING", "Invalid ingressTarget config value specified for " .. interface)
+		else
+			ingress.bandwidthTarget = config.ingressTarget
+		end
 	end
 
 	maximumPersistence = maximumPersistence ^ interval
 	pingPersistence = pingPersistence ^ interval
 	stablePersistence = stablePersistence ^ interval
-	assuredPeriod = assuredPeriod / interval
+	assuredPeriod = stableSeconds / interval
 end
 
 local function daemonise()
