@@ -286,16 +286,27 @@ end
 local function calculateDecreaseChance(qdisc)
 	if not qdisc.kind then
 		qdisc.decreaseChance = nil
+		qdisc.baselineDecreaseChance = nil
+		qdisc.utilisationChanceReducer = nil
 		return
 	end
 
 	if ping < qdisc.ping.limit then
 		qdisc.decreaseChance = 0
+		qdisc.baselineDecreaseChance = 0
+		qdisc.utilisationChanceReducer = 0
 		return
 	end
 
 	local baseline = (qdisc.stable + qdisc.maximum * qdisc.bandwidthTarget * 0.9 + qdisc.target * 0.1) * 0.5
-	qdisc.decreaseChance = (qdisc.rate - baseline) / baseline
+	qdisc.baselineDecreaseChance = (qdisc.rate - baseline) / baseline
+
+	if qdisc.rate > qdisc.bandwidth then
+		qdisc.utilisationChanceReducer = (qdisc.bandwidth / qdisc.rate) ^ 3
+	else
+		qdisc.utilisationChanceReducer = 1
+	end
+	qdisc.decreaseChance = qdisc.baselineDecreaseChance * qdisc.utilisationChanceReducer
 end
 
 local function amplifyDecreaseChanceDelta()
@@ -304,14 +315,19 @@ local function amplifyDecreaseChanceDelta()
 		or not ingress.decreaseChance
 		or egress.decreaseChance <= 0
 		or ingress.decreaseChance <= 0
-		or egress.decreaseChance == ingress.decreaseChance
 	then
 		return
 	end
 
-	if ingress.decreaseChance < egress.decreaseChance then
+	if egress.utilisationChanceReducer < ingress.utilisationChanceReducer then
+		ingress.decreaseChance = ingress.decreaseChance * egress.utilisationChanceReducer
+	elseif egress.utilisationChanceReducer > ingress.utilisationChanceReducer then
+		egress.decreaseChance = egress.decreaseChance * ingress.utilisationChanceReducer
+	end
+
+	if egress.decreaseChance > ingress.decreaseChance then
 		ingress.decreaseChance = ingress.decreaseChance * (ingress.decreaseChance / egress.decreaseChance) ^ 15
-	else
+	elseif egress.decreaseChance < ingress.decreaseChance then
 		egress.decreaseChance = egress.decreaseChance * (egress.decreaseChance / ingress.decreaseChance) ^ 15
 	end
 end
@@ -358,7 +374,7 @@ local function calculateIncrease(qdisc)
 
 	local targetMultiplier = qdisc.target / qdisc.bandwidth
 	if targetMultiplier < 1 then
-		targetMultiplier = targetMultiplier ^ 15
+		targetMultiplier = targetMultiplier ^ 20
 	end
 
 	qdisc.change = qdisc.bandwidth * 0.025 * interval * pingMultiplier * targetMultiplier
