@@ -280,7 +280,7 @@ local function updateRateStatistics(qdisc)
 	end
 
 	qdisc.minimum = math.max(qdisc.maximum * 0.25, qdisc.stable, qdisc.peak * 0.01)
-	qdisc.target = math.max(qdisc.bandwidth * qdisc.bandwidthTarget, qdisc.peak * qdisc.bandwidthTarget)
+	qdisc.target = math.max(qdisc.bandwidth * qdisc.bandwidthTarget, qdisc.peak * qdisc.bandwidthTarget, qdisc.stable)
 end
 
 local function calculateDecreaseChance(qdisc)
@@ -358,7 +358,7 @@ local function calculateIncrease(qdisc)
 
 	local targetMultiplier = qdisc.target / qdisc.bandwidth
 	if targetMultiplier < 1 then
-		targetMultiplier = targetMultiplier ^ 25
+		targetMultiplier = targetMultiplier ^ 15
 	end
 
 	qdisc.change = qdisc.bandwidth * 0.025 * interval * pingMultiplier * targetMultiplier
@@ -382,8 +382,10 @@ local function calculateChange(qdisc)
 	if
 		ping < qdisc.ping.target
 		and qdisc.cooldown == 0
-		and (qdisc.ping.clear >= 10 or qdisc.ping.clear >= stableSeconds and qdisc.stable > qdisc.bandwidth * 0.98)
-		and math.random(1, 100) <= 25
+		and (
+			(qdisc.ping.clear >= stableSeconds and qdisc.stable > qdisc.bandwidth * 0.98)
+			or (qdisc.ping.clear >= 10 and math.random(1, 100) <= 25)
+		)
 	then
 		calculateIncrease(qdisc)
 		return
@@ -596,16 +598,19 @@ local function processPingOutput(line)
 		pingStatus = 5
 	elseif string.find(line, "ping_send failed: No such device") then
 		pingStatus = 5
-	elseif string.find(line, "^Hangup$") or string.find(line, "^Killed$") or string.find(line, "^Terminated$") then
-		pingStatus = 4
-	elseif string.find(line, " packets transmitted, .* received, .* packet loss, time .*ms") then
+	elseif
+		string.find(line, "^Hangup$")
+		or string.find(line, "^Killed$")
+		or string.find(line, "^Terminated$")
+		or string.find(line, " packets transmitted, .* received, .* packet loss, time .*ms")
+	then
 		pingStatus = 4
 	elseif string.find(line, "Usage: oping ") then
 		pingStatus = 3
 	elseif string.find(line, "ping_send failed: ") then
 		pingStatus = 2
 	elseif string.find(line, "Invalid QoS argument:") then
-		log("LOG_ERR", line)
+		log("LOG_ERR", "Invalid dscp config value specified for " .. interface)
 		exit()
 	elseif string.find(line, "ping_sendto: Permission denied") then
 		log("LOG_ERR", "Unable to ping remote hosts on " .. interface .. " (" .. device .. ")")
@@ -711,7 +716,7 @@ local function initialise()
 	end
 
 	if config.iptype and config.iptype ~= "ipv4" and config.iptype ~= "ipv6" and config.iptype ~= "ipv4v6" then
-		log("LOG_WARNING", "Invalid iptype specified for " .. interface)
+		log("LOG_WARNING", "Invalid iptype config value specified for " .. interface)
 		config.iptype = nil
 	end
 
