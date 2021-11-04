@@ -319,13 +319,16 @@ local function amplifyDecreaseChanceDelta()
 		return
 	end
 
-	ingress.decreaseChance = ingress.decreaseChance * egress.decreaseChanceReducer
-	egress.decreaseChance = egress.decreaseChance * ingress.decreaseChanceReducer
+	if egress.decreaseChanceReducer < ingress.decreaseChanceReducer then
+		egress.decreaseChance = egress.decreaseChance * ingress.decreaseChanceReducer
+	elseif egress.decreaseChanceReducer > ingress.decreaseChanceReducer then
+		ingress.decreaseChance = ingress.decreaseChance * egress.decreaseChanceReducer
+	end
 
-	if egress.decreaseChance > ingress.decreaseChance then
-		ingress.decreaseChance = ingress.decreaseChance * (ingress.decreaseChance / egress.decreaseChance) ^ 15
-	elseif egress.decreaseChance < ingress.decreaseChance then
+	if egress.decreaseChance < ingress.decreaseChance then
 		egress.decreaseChance = egress.decreaseChance * (egress.decreaseChance / ingress.decreaseChance) ^ 15
+	elseif egress.decreaseChance > ingress.decreaseChance then
+		ingress.decreaseChance = ingress.decreaseChance * (ingress.decreaseChance / egress.decreaseChance) ^ 15
 	end
 end
 
