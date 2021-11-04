@@ -275,8 +275,8 @@ local function updateRateStatistics(qdisc)
 		qdisc.maximum = qdisc.maximum * maximumPersistence + qdisc.rate * (1 - maximumPersistence)
 	end
 
-	if not qdisc.peak or qdisc.rate > qdisc.peak then
-		qdisc.peak = qdisc.rate
+	if not qdisc.peak or assured > qdisc.peak then
+		qdisc.peak = assured
 	end
 
 	qdisc.minimum = math.max(qdisc.maximum * 0.25, qdisc.stable, qdisc.peak * 0.01)
@@ -399,8 +399,8 @@ local function calculateChange(qdisc)
 		ping < qdisc.ping.target
 		and qdisc.cooldown == 0
 		and (
-			(qdisc.ping.clear >= stableSeconds and qdisc.stable > qdisc.bandwidth * 0.98)
-			or (qdisc.ping.clear >= 10 and math.random(1, 100) <= 25)
+			qdisc.ping.clear >= stableSeconds and qdisc.stable > qdisc.bandwidth * 0.98
+			or qdisc.ping.clear >= 10 and math.random(1, 100) <= 25
 		)
 	then
 		calculateIncrease(qdisc)
