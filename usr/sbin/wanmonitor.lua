@@ -28,7 +28,7 @@ local dscp
 local hosts
 local interval
 local iptype
-local maximumPersistence
+local shortPeakPersistence
 local pingPersistence
 local stablePersistence
 local stableSeconds
@@ -245,7 +245,8 @@ local function updateRateStatistics(qdisc)
 	if not qdisc.kind then
 		qdisc.maximum = nil
 		qdisc.minimum = nil
-		qdisc.peak = nil
+		qdisc.shortPeak = nil
+		qdisc.longPeak = nil
 		qdisc.stable = nil
 		qdisc.assuredSample = nil
 		qdisc.target = nil
@@ -269,18 +270,24 @@ local function updateRateStatistics(qdisc)
 		qdisc.stable = qdisc.stable * stablePersistence + assuredMean * (1 - stablePersistence)
 	end
 
-	if not qdisc.maximum or qdisc.rate > qdisc.maximum then
-		qdisc.maximum = qdisc.rate
+	if not qdisc.shortPeak or qdisc.rate > qdisc.shortPeak then
+		qdisc.shortPeak = qdisc.rate
 	else
-		qdisc.maximum = qdisc.maximum * maximumPersistence + qdisc.rate * (1 - maximumPersistence)
+		qdisc.shortPeak = qdisc.shortPeak * shortPeakPersistence + qdisc.rate * (1 - shortPeakPersistence)
 	end
 
-	if not qdisc.peak or assured > qdisc.peak then
-		qdisc.peak = assured
+	if not qdisc.longPeak or qdisc.rate > qdisc.longPeak then
+		qdisc.longPeak = qdisc.rate
+	else
+		qdisc.longPeak = qdisc.longPeak * longPeakPersistence + qdisc.rate * (1 - longPeakPersistence)
 	end
 
-	qdisc.minimum = math.max(qdisc.maximum * 0.25, qdisc.stable, qdisc.peak * 0.01)
-	qdisc.target = math.max(qdisc.bandwidth * qdisc.bandwidthTarget, qdisc.peak * qdisc.bandwidthTarget, qdisc.stable)
+	if not qdisc.maximum or assured > qdisc.maximum then
+		qdisc.maximum = assured
+	end
+
+	qdisc.minimum = math.max(qdisc.shortPeak * 0.25, qdisc.stable, qdisc.maximum * 0.01)
+	qdisc.target = math.max(qdisc.bandwidth * qdisc.bandwidthTarget, qdisc.stable, qdisc.maximum)
 end
 
 local function calculateDecreaseChance(qdisc)
@@ -298,7 +305,7 @@ local function calculateDecreaseChance(qdisc)
 		return
 	end
 
-	local baseline = (qdisc.stable + qdisc.maximum * qdisc.bandwidthTarget * 0.9 + qdisc.target * 0.1) * 0.5
+	local baseline = (qdisc.stable + qdisc.shortPeak * qdisc.bandwidthTarget * 0.9 + qdisc.longPeak * qdisc.bandwidthTarget * 0.1) * 0.5
 	qdisc.baselineDecreaseChance = (qdisc.rate - baseline) / baseline
 
 	if qdisc.rate > qdisc.bandwidth then
@@ -355,7 +362,7 @@ end
 local function calculateDecrease(qdisc)
 	local pingMultiplier = 1 - (qdisc.ping.limit / ping) ^ qdisc.ping.latent
 
-	qdisc.change = (qdisc.bandwidth - qdisc.maximum * qdisc.bandwidthTarget)
+	qdisc.change = (qdisc.bandwidth - qdisc.shortPeak * qdisc.bandwidthTarget)
 		* interval
 		* pingMultiplier
 		* qdisc.decreaseChance
@@ -523,8 +530,9 @@ local function writeStatus()
 				device = egress.device,
 				target = egress.target,
 				bandwidth = egress.bandwidth,
-				peak = egress.peak,
 				maximum = egress.maximum,
+				shortPeak = egress.shortPeak,
+				longPeak = egress.longPeak,
 				rate = egress.rate,
 				stable = egress.stable,
 				decreaseChance = egress.decreaseChance,
@@ -534,8 +542,9 @@ local function writeStatus()
 				device = ingress.device,
 				target = ingress.target,
 				bandwidth = ingress.bandwidth,
-				peak = ingress.peak,
 				maximum = ingress.maximum,
+				shortPeak = ingress.shortPeak,
+				longPeak = ingress.longPeak,
 				rate = ingress.rate,
 				stable = ingress.stable,
 				decreaseChance = ingress.decreaseChance,
@@ -800,7 +809,8 @@ local function initialise()
 		return
 	end
 
-	maximumPersistence = 0.25
+	shortPeakPersistence = 0.25
+	longPeakPersistence = 0.999
 	pingPersistence = 0.99
 	stablePersistence = 0.9
 	stableSeconds = 2
@@ -814,12 +824,21 @@ local function initialise()
 		ingress.device = config.ingressDevice
 	end
 
-	if config.maximumPersistence then
-		config.maximumPersistence = tonumber(config.maximumPersistence)
-		if not config.maximumPersistence or config.maximumPersistence <= 0 or config.maximumPersistence > 1 then
-			log("LOG_WARNING", "Invalid maximumPersistence config value specified for " .. interface)
+	if config.shortPeakPersistence then
+		config.shortPeakPersistence = tonumber(config.shortPeakPersistence)
+		if not config.shortPeakPersistence or config.shortPeakPersistence <= 0 or config.shortPeakPersistence > 1 then
+			log("LOG_WARNING", "Invalid shortPeakPersistence config value specified for " .. interface)
 		else
-			maximumPersistence = config.maximumPersistence
+			shortPeakPersistence = config.shortPeakPersistence
+		end
+	end
+
+	if config.longPeakPersistence then
+		config.longPeakPersistence = tonumber(config.longPeakPersistence)
+		if not config.longPeakPersistence or config.longPeakPersistence <= 0 or config.longPeakPersistence > 1 then
+			log("LOG_WARNING", "Invalid longPeakPersistence config value specified for " .. interface)
+		else
+			longPeakPersistence = config.longPeakPersistence
 		end
 	end
 
@@ -869,7 +888,8 @@ local function initialise()
 	end
 
 	assuredPeriod = stableSeconds / interval
-	maximumPersistence = maximumPersistence ^ interval
+	shortPeakPersistence = shortPeakPersistence ^ interval
+	longPeakPersistence = longPeakPersistence ^ interval
 	pingPersistence = pingPersistence ^ interval
 	stablePersistence = stablePersistence ^ interval
 end
