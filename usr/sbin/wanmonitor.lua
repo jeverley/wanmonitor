@@ -363,7 +363,7 @@ end
 local function calculateDecrease(qdisc)
 	local pingMultiplier = 1 - (qdisc.ping.limit / ping) ^ qdisc.ping.latent
 
-	qdisc.change = (qdisc.bandwidth - qdisc.shortPeak * qdisc.bandwidthTarget) * interval * pingMultiplier * qdisc.decreaseChance * -1
+	qdisc.change = (qdisc.bandwidth - qdisc.minimum) * interval * pingMultiplier * qdisc.decreaseChance * -1
 	if qdisc.bandwidth + qdisc.change < qdisc.minimum then
 		qdisc.change = qdisc.minimum - qdisc.bandwidth
 	end
@@ -930,4 +930,3 @@ local function main()
 end
 
 main()
-
