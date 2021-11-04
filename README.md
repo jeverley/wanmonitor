@@ -26,12 +26,20 @@ Scipt files should be placed in the OpenWrt router filesystem according to the r
 * /etc/hotplug.d/iface/30-wanmonitor
 * /etc/init.d/wanmonitor
 
+The following ssh commands can be used to achieve this:
+
 ```shell
+opkg update
+opkg install oping liboping luaposix
+wget https://raw.githubusercontent.com/jeverley/wanmonitor/main/usr/sbin/wanmonitor.lua -O /usr/sbin/wanmonitor.lua
+wget https://raw.githubusercontent.com/jeverley/wanmonitor/main/etc/config/wanmonitor -O /etc/config/wanmonitor
+wget https://raw.githubusercontent.com/jeverley/wanmonitor/main/etc/hotplug.d/iface/30-wanmonitor -O /etc/hotplug.d/iface/30-wanmonitor
+wget https://raw.githubusercontent.com/jeverley/wanmonitor/main/etc/init.d/wanmonitor -O /etc/init.d/wanmonitor
 chmod +x /etc/hotplug.d/iface/30-wanmonitor
 chmod +x /etc/init.d/wanmonitor
 ```
 
-Once the configuration file has been updated to match your local setup the service can be enabled and started by running the following commands from shell:
+Once the configuration file has been updated to match your local setup the service can be enabled and started by running the following commands from ssh:
 ```shell
 service wanmonitor enable
 service wanmonitor start
