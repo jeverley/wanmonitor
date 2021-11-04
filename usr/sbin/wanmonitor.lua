@@ -18,7 +18,7 @@ local ingress
 local interface
 local pid
 local pidFile
-local cpid
+local childPid
 local ping
 local pingStatus
 local statusFile
@@ -52,8 +52,8 @@ local function log(priority, message)
 end
 
 local function cleanup()
-	if cpid then
-		signal.kill(cpid, signal.SIGKILL)
+	if childPid then
+		signal.kill(childPid, signal.SIGKILL)
 	end
 	os.remove(statusFile)
 	os.remove(pidFile)
@@ -285,16 +285,16 @@ end
 
 local function calculateDecreaseChance(qdisc)
 	if not qdisc.kind then
-		qdisc.decreaseChance = nil
 		qdisc.baselineDecreaseChance = nil
-		qdisc.utilisationChanceReducer = nil
+		qdisc.decreaseChance = nil
+		qdisc.decreaseChanceReducer = nil
 		return
 	end
 
 	if ping < qdisc.ping.limit then
-		qdisc.decreaseChance = 0
 		qdisc.baselineDecreaseChance = 0
-		qdisc.utilisationChanceReducer = 0
+		qdisc.decreaseChance = 0
+		qdisc.decreaseChanceReducer = 0
 		return
 	end
 
@@ -302,11 +302,11 @@ local function calculateDecreaseChance(qdisc)
 	qdisc.baselineDecreaseChance = (qdisc.rate - baseline) / baseline
 
 	if qdisc.rate > qdisc.bandwidth then
-		qdisc.utilisationChanceReducer = (qdisc.bandwidth / qdisc.rate) ^ 3
+		qdisc.decreaseChanceReducer = (qdisc.bandwidth / qdisc.rate) ^ 3
 	else
-		qdisc.utilisationChanceReducer = 1
+		qdisc.decreaseChanceReducer = 1
 	end
-	qdisc.decreaseChance = qdisc.baselineDecreaseChance * qdisc.utilisationChanceReducer
+	qdisc.decreaseChance = qdisc.baselineDecreaseChance * qdisc.decreaseChanceReducer
 end
 
 local function amplifyDecreaseChanceDelta()
@@ -319,11 +319,8 @@ local function amplifyDecreaseChanceDelta()
 		return
 	end
 
-	if egress.utilisationChanceReducer < ingress.utilisationChanceReducer then
-		ingress.decreaseChance = ingress.decreaseChance * egress.utilisationChanceReducer
-	elseif egress.utilisationChanceReducer > ingress.utilisationChanceReducer then
-		egress.decreaseChance = egress.decreaseChance * ingress.utilisationChanceReducer
-	end
+	ingress.decreaseChance = ingress.decreaseChance * egress.decreaseChanceReducer
+	egress.decreaseChance = egress.decreaseChance * ingress.decreaseChanceReducer
 
 	if egress.decreaseChance > ingress.decreaseChance then
 		ingress.decreaseChance = ingress.decreaseChance * (ingress.decreaseChance / egress.decreaseChance) ^ 15
@@ -665,14 +662,14 @@ local function pingLoop()
 			.. table.concat(hosts, " ")
 			.. " 2>&1"
 	)
-	cpid = execute("pgrep -n -x oping -P " .. pid)
+	childPid = execute("pgrep -n -x oping -P " .. pid)
 
 	repeat
 		local line = fd:read("*line")
 		processPingOutput(line)
 	until not line
 	fd:close()
-	cpid = nil
+	childPid = nil
 end
 
 local function initialise()
@@ -868,10 +865,10 @@ local function initialise()
 		end
 	end
 
+	assuredPeriod = stableSeconds / interval
 	maximumPersistence = maximumPersistence ^ interval
 	pingPersistence = pingPersistence ^ interval
 	stablePersistence = stablePersistence ^ interval
-	assuredPeriod = stableSeconds / interval
 end
 
 local function daemonise()
