@@ -15,7 +15,7 @@ stop() {
 	for i in $(interfaces $@); do
 		if [ -f "/var/run/wanmonitor.$i.pid" ]; then
 			local pid=$(cat "/var/run/wanmonitor.$i.pid")
-			kill -15 "$pid" 2>/dev/null
+			[ -n "$pid" ] && kill -15 "$pid" 2>/dev/null
 			rm -f "/var/run/wanmonitor.$i.pid"
 		fi
 		rm -f "/var/wanmonitor.$i.json"
@@ -27,6 +27,7 @@ start() {
 		stop "$i"
 		lua /usr/sbin/wanmonitor.lua -i "$i"
 	done
+	/etc/init.d/sqm enabled >/dev/null 2>&1 && /etc/init.d/sqm restart >/dev/null 2>&1
 }
 
 boot() {
