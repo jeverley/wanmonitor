@@ -29,6 +29,7 @@ local hosts
 local interval
 local iptype
 local shortPeakPersistence
+local longPeakPersistence
 local pingPersistence
 local stablePersistence
 local stableSeconds
@@ -286,8 +287,8 @@ local function updateRateStatistics(qdisc)
 		qdisc.maximum = assured
 	end
 
-	qdisc.minimum = math.max(qdisc.shortPeak * 0.25, qdisc.stable, qdisc.maximum * 0.01)
-	qdisc.target = math.max(qdisc.bandwidth * qdisc.bandwidthTarget, qdisc.stable, qdisc.maximum)
+	qdisc.minimum = math.max(qdisc.shortPeak * qdisc.bandwidthTarget, qdisc.stable, qdisc.maximum * 0.01)
+	qdisc.target = math.max(qdisc.bandwidth * qdisc.bandwidthTarget, qdisc.maximum)
 end
 
 local function calculateDecreaseChance(qdisc)
@@ -309,7 +310,7 @@ local function calculateDecreaseChance(qdisc)
 	qdisc.baselineDecreaseChance = (qdisc.rate - baseline) / baseline
 
 	if qdisc.rate > qdisc.bandwidth then
-		qdisc.decreaseChanceReducer = (qdisc.bandwidth / qdisc.rate) ^ 3
+		qdisc.decreaseChanceReducer = (qdisc.bandwidth / qdisc.rate) ^ 4
 	else
 		qdisc.decreaseChanceReducer = 1
 	end
@@ -362,11 +363,7 @@ end
 local function calculateDecrease(qdisc)
 	local pingMultiplier = 1 - (qdisc.ping.limit / ping) ^ qdisc.ping.latent
 
-	qdisc.change = (qdisc.bandwidth - qdisc.shortPeak * qdisc.bandwidthTarget)
-		* interval
-		* pingMultiplier
-		* qdisc.decreaseChance
-		* -1
+	qdisc.change = (qdisc.bandwidth - qdisc.shortPeak * qdisc.bandwidthTarget) * interval * pingMultiplier * qdisc.decreaseChance * -1
 	if qdisc.bandwidth + qdisc.change < qdisc.minimum then
 		qdisc.change = qdisc.minimum - qdisc.bandwidth
 	end
@@ -810,7 +807,7 @@ local function initialise()
 	end
 
 	shortPeakPersistence = 0.25
-	longPeakPersistence = 0.999
+	longPeakPersistence = 0.99
 	pingPersistence = 0.99
 	stablePersistence = 0.9
 	stableSeconds = 2
