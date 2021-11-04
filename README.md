@@ -45,6 +45,8 @@ service wanmonitor enable
 service wanmonitor start
 ```
 
+**The bandwidth configured for your engress/ingress under SQM setup are used by the service as starting points for adaptive bandwidth control.**
+
 # wanmonitor configuration options
 The service configuration is controlled through the config file:
 /etc/config/wanmonitor
