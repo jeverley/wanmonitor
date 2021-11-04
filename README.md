@@ -1,6 +1,6 @@
 Copyright 2021 Jack Everley
 
-# wanmonitor
+# wanmonitor - Adaptive Bandwidth for Cake
 A set of scripts providing WAN interface monitoring and SQM autoscaling for OpenWrt routers.
 
 The main lua executable currently supports the folling features:
