@@ -837,6 +837,7 @@ local function initialise()
 		return
 	end
 
+	pingTargetCurve = 0.7
 	shortPeakPersistence = 0.25
 	longPeakPersistence = 0.99
 	pingPersistence = 0.99
