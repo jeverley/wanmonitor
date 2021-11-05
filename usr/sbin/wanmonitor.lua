@@ -11,8 +11,6 @@ local syslog = require("posix.syslog")
 local systime = require("posix.sys.time")
 local unistd = require("posix.unistd")
 
-local verbose
-local appendStatus
 local egress
 local ingress
 local interface
@@ -36,6 +34,11 @@ local stableSeconds
 local assuredPeriod
 local reconnect
 local autorate
+local rttLimit
+local pingTargetCurve
+local verbose
+local logFolder
+local adjustmentLogFile
 
 local hostsCount
 local pingResponseCount
@@ -45,6 +48,7 @@ local retriesRemaining
 local previousRxBytes
 local previousTxBytes
 local previousEpoch
+local intervalEpoch
 
 local function log(priority, message)
 	syslog.openlog("wanmonitor", syslog.LOG_PID, syslog.LOG_DAEMON)
@@ -209,7 +213,12 @@ local function updatePingStatistics(qdisc)
 		qdisc.ping.latent = 0
 	end
 
-	local limit = qdisc.rtt * 1.05
+	local limit
+	if rttLimit then
+		limit = rttLimit
+	else
+		limit = qdisc.rtt * 1.05
+	end
 	if not qdisc.ping.limit or ping < limit then
 		qdisc.ping.limit = limit
 	else
@@ -226,7 +235,7 @@ local function updatePingStatistics(qdisc)
 	end
 
 	qdisc.ping.target = qdisc.ping.minimum
-		+ (qdisc.ping.limit - qdisc.ping.minimum) * (qdisc.ping.minimum / qdisc.ping.limit) ^ 0.7
+		+ (qdisc.ping.limit - qdisc.ping.minimum) * (qdisc.ping.minimum / qdisc.ping.limit) ^ pingTargetCurve
 
 	if ping > qdisc.ping.limit then
 		qdisc.ping.clear = 0
@@ -306,7 +315,11 @@ local function calculateDecreaseChance(qdisc)
 		return
 	end
 
-	local baseline = (qdisc.stable + qdisc.shortPeak * qdisc.bandwidthTarget * 0.9 + qdisc.longPeak * qdisc.bandwidthTarget * 0.1) * 0.5
+	local baseline = (
+			qdisc.stable
+			+ qdisc.shortPeak * qdisc.bandwidthTarget * 0.9
+			+ qdisc.longPeak * qdisc.bandwidthTarget * 0.1
+		) * 0.5
 	qdisc.baselineDecreaseChance = (qdisc.rate - baseline) / baseline
 
 	if qdisc.rate > qdisc.bandwidth then
@@ -496,15 +509,14 @@ local function adjustSqm()
 	updateQdisc(ingress)
 end
 
-local function writeStatus()
-	local mode
-	if appendStatus then
-		mode = "a"
+local function writeStatus(file, mode)
+	if not file then
+		file = statusFile
 	end
 
 	if verbose then
 		writeFile(
-			statusFile,
+			file,
 			jsonc.stringify({
 				interface = interface,
 				device = device,
@@ -518,7 +530,7 @@ local function writeStatus()
 	end
 
 	writeFile(
-		statusFile,
+		file,
 		jsonc.stringify({
 			interface = interface,
 			device = device,
@@ -552,10 +564,21 @@ local function writeStatus()
 	)
 end
 
+local function updateChangeLog()
+	if not adjustmentLogFile then
+		return
+	end
+
+	if (ingress.change and ingress.change > 0) or (egress.change and egress.change > 0) then
+		os.execute("mkdir -p " .. logFolder)
+		writeStatus(adjustmentLogFile, "a")
+	end
+end
+
 local function statisticsInterval()
 	local txBytes = tonumber(readFile("/sys/class/net/" .. device .. "/statistics/tx_bytes"))
 	local rxBytes = tonumber(readFile("/sys/class/net/" .. device .. "/statistics/rx_bytes"))
-	local intervalEpoch = epoch()
+	intervalEpoch = epoch()
 
 	if not txBytes or not rxBytes or not intervalEpoch then
 		log("LOG_ERR", "Cannot read tx/rx rates for " .. interface .. " (" .. device .. ")")
@@ -582,6 +605,7 @@ local function statisticsInterval()
 		ping = interval * 1000
 	end
 	adjustSqm()
+	updateChangeLog()
 	writeStatus()
 end
 
@@ -653,6 +677,7 @@ local function pingLoop()
 	end
 
 	hostsCount = #hosts
+	intervalEpoch = nil
 	ping = nil
 	pingResponseCount = 0
 	pingResponseTimes = {}
@@ -722,7 +747,9 @@ local function initialise()
 	retries = 2
 	autorate = false
 	verbose = false
-	appendStatus = false
+	logFolder = nil
+	adjustmentLogFile = nil
+	rttLimit = nil
 
 	if config.dscp then
 		dscp = config.dscp
@@ -793,12 +820,16 @@ local function initialise()
 		end
 	end
 
-	if config.appendStatus then
-		config.appendStatus = toboolean(config.appendStatus)
-		if config.appendStatus == nil then
-			log("LOG_WARNING", "Invalid appendStatus config value specified for " .. interface)
+	if config.logFolder then
+		if not string.find(config.logFolder, "^/[^%$]*$") then
+			config.logFolder = nil
+		end
+		if config.logFolder == nil then
+			log("LOG_WARNING", "Invalid logFolder config value specified for " .. interface)
 		else
-			appendStatus = config.appendStatus
+			logFolder = config.logFolder
+			adjustmentLogFile = logFolder .. "/wanmonitor." .. interface .. ".log.json"
+			os.remove(adjustmentLogFile)
 		end
 	end
 
@@ -881,6 +912,24 @@ local function initialise()
 			log("LOG_WARNING", "Invalid ingressTarget config value specified for " .. interface)
 		else
 			ingress.bandwidthTarget = config.ingressTarget
+		end
+	end
+
+	if config.rttLimit then
+		config.rttLimit = tonumber(config.rttLimit)
+		if not config.rttLimit or config.rttLimit <= 0 then
+			log("LOG_WARNING", "Invalid rttLimit config value specified for " .. interface)
+		else
+			rttLimit = config.rttLimit
+		end
+	end
+
+	if config.pingTargetCurve then
+		config.pingTargetCurve = tonumber(config.pingTargetCurve)
+		if not config.pingTargetCurve or config.pingTargetCurve <= 0 then
+			log("LOG_WARNING", "Invalid pingTargetCurve config value specified for " .. interface)
+		else
+			pingTargetCurve = config.pingTargetCurve
 		end
 	end
 
