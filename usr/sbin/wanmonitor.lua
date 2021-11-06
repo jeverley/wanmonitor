@@ -99,6 +99,22 @@ local function median(values)
 	return sorted[middle + 0.5]
 end
 
+local function movingMedian(persist, observation)
+	if not persist.median or not persist.step then
+		persist.median = observation
+		persist.step = math.max(math.abs(observation / 2), 1)
+	end
+	if persist.median > observation then
+		persist.median = persist.median - persist.step
+	elseif persist.median < observation then
+		persist.median = persist.median + persist.step
+	end
+	if math.abs(observation - persist.median) < persist.step then
+		persist.step = persist.step / 2
+	end
+	return persist.median
+end
+
 local function movingMean(sample, value, period)
 	table.insert(sample, value)
 	while #sample > period do
@@ -201,54 +217,32 @@ local function interfaceReconnect(interface)
 	os.exit()
 end
 
-local function updatePingStatistics(qdisc)
-	if not qdisc.kind then
-		qdisc.ping = nil
+local function updatePingStatistics()
+	if not ping.clear then
+		ping.clear = 0
+		ping.latent = 0
+		ping.persist = {}
+		if ping.current > rttLimit then
+			movingMedian(ping.persist, rttLimit)
+		end
+	end
+
+	ping.median = movingMedian(ping.persist, ping.current)
+	ping.limit = ping.median * 2
+	ping.target = ping.median * 1.2
+
+	if ping.current > ping.limit then
+		ping.clear = 0
+		ping.latent = ping.latent + interval
 		return
 	end
 
-	if not qdisc.ping then
-		qdisc.ping = {}
-		qdisc.ping.clear = 0
-		qdisc.ping.latent = 0
-	end
-
-	local limit
-	if rttLimit then
-		limit = rttLimit
-	else
-		limit = qdisc.rtt * 1.05
-	end
-	if not qdisc.ping.limit or ping < limit then
-		qdisc.ping.limit = limit
-	else
-		qdisc.ping.limit = qdisc.ping.limit * pingPersistence + ping * (1 - pingPersistence)
-	end
-
-	if not qdisc.ping.minimum or qdisc.ping.minimum > qdisc.ping.limit then
-		qdisc.ping.minimum = qdisc.ping.limit
-	end
-	if ping < qdisc.ping.minimum then
-		qdisc.ping.minimum = ping
-	else
-		qdisc.ping.minimum = qdisc.ping.minimum * pingPersistence + qdisc.ping.limit * (1 - pingPersistence)
-	end
-
-	qdisc.ping.target = qdisc.ping.minimum
-		+ (qdisc.ping.limit - qdisc.ping.minimum) * (qdisc.ping.minimum / qdisc.ping.limit) ^ pingTargetCurve
-
-	if ping > qdisc.ping.limit then
-		qdisc.ping.clear = 0
-		qdisc.ping.latent = qdisc.ping.latent + interval
+	if ping.current > ping.target then
 		return
 	end
 
-	if ping > qdisc.ping.target then
-		return
-	end
-
-	qdisc.ping.clear = qdisc.ping.clear + interval
-	qdisc.ping.latent = 0
+	ping.clear = ping.clear + interval
+	ping.latent = 0
 end
 
 local function updateRateStatistics(qdisc)
@@ -264,7 +258,7 @@ local function updateRateStatistics(qdisc)
 	end
 
 	local assured
-	if ping < qdisc.ping.target then
+	if ping.current < ping.target then
 		assured = qdisc.rate
 	else
 		assured = qdisc.rate * qdisc.bandwidthTarget
@@ -274,7 +268,7 @@ local function updateRateStatistics(qdisc)
 	end
 	local assuredMean = movingMean(qdisc.assuredSample, assured, assuredPeriod)
 
-	if not qdisc.stable or ping < qdisc.ping.target then
+	if not qdisc.stable or ping.current < ping.target then
 		qdisc.stable = assuredMean
 	else
 		qdisc.stable = qdisc.stable * stablePersistence + assuredMean * (1 - stablePersistence)
@@ -308,7 +302,7 @@ local function calculateDecreaseChance(qdisc)
 		return
 	end
 
-	if ping < qdisc.ping.limit then
+	if ping.current < ping.limit then
 		qdisc.baselineDecreaseChance = 0
 		qdisc.decreaseChance = 0
 		qdisc.decreaseChanceReducer = 0
@@ -368,13 +362,13 @@ local function updateCooldown(qdisc)
 		return
 	end
 
-	if ping < qdisc.ping.target and qdisc.cooldown > 0 then
+	if ping.current < ping.target and qdisc.cooldown > 0 then
 		qdisc.cooldown = qdisc.cooldown - interval
 	end
 end
 
 local function calculateDecrease(qdisc)
-	local pingMultiplier = 1 - (qdisc.ping.limit / ping) ^ qdisc.ping.latent
+	local pingMultiplier = 1 - (ping.limit / ping.current) ^ ping.latent
 
 	qdisc.change = (qdisc.bandwidth - qdisc.minimum) * interval * pingMultiplier * qdisc.decreaseChance * -1
 	if qdisc.bandwidth + qdisc.change < qdisc.minimum then
@@ -387,7 +381,7 @@ local function calculateDecrease(qdisc)
 end
 
 local function calculateIncrease(qdisc)
-	local pingMultiplier = 1 - ping / qdisc.ping.target
+	local pingMultiplier = 1 - ping.current / ping.target
 
 	local targetMultiplier = qdisc.target / qdisc.bandwidth
 	if targetMultiplier < 1 then
@@ -413,11 +407,11 @@ local function calculateChange(qdisc)
 	end
 
 	if
-		ping < qdisc.ping.target
+		ping.current < ping.target
 		and qdisc.cooldown == 0
 		and (
-			qdisc.ping.clear >= stableSeconds and qdisc.stable > qdisc.bandwidth * 0.98
-			or qdisc.ping.clear >= 10 and math.random(1, 100) <= 25
+			ping.clear >= stableSeconds and qdisc.stable > qdisc.bandwidth * 0.98
+			or ping.clear >= 10 and math.random(1, 100) <= 25
 		)
 	then
 		calculateIncrease(qdisc)
@@ -489,8 +483,7 @@ local function adjustSqm()
 	getQdisc(egress)
 	getQdisc(ingress)
 
-	updatePingStatistics(egress)
-	updatePingStatistics(ingress)
+	updatePingStatistics()
 
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
@@ -534,7 +527,10 @@ local function writeStatus(file, mode)
 		jsonc.stringify({
 			interface = interface,
 			device = device,
-			ping = ping,
+			pingLimit = ping.limit,
+			pingTarget = ping.target,
+			pingMedian = ping.median,
+			ping = ping.current,
 			egress = {
 				device = egress.device,
 				target = egress.target,
@@ -595,14 +591,14 @@ local function statisticsInterval()
 	previousRxBytes = rxBytes
 	previousEpoch = intervalEpoch
 
-	if not ping and ingress.rate == 0 then
+	if not ping.current and ingress.rate == 0 then
 		interfaceReconnect(interface)
 		writeStatus()
 		return
 	end
 
-	if not ping then
-		ping = interval * 1000
+	if not ping.current then
+		ping.current = interval * 1000
 	end
 	adjustSqm()
 	updateChangeLog()
@@ -628,10 +624,10 @@ local function processPingOutput(line)
 
 		if #pingResponseTimes > 0 then
 			pingStatus = 0
-			ping = median(pingResponseTimes)
+			ping.current = median(pingResponseTimes)
 		else
 			pingStatus = 1
-			ping = nil
+			ping.current = nil
 		end
 
 		statisticsInterval()
@@ -678,7 +674,7 @@ local function pingLoop()
 
 	hostsCount = #hosts
 	intervalEpoch = nil
-	ping = nil
+	ping = {}
 	pingResponseCount = 0
 	pingResponseTimes = {}
 	pingStatus = nil
@@ -749,7 +745,7 @@ local function initialise()
 	verbose = false
 	logFolder = nil
 	adjustmentLogFile = nil
-	rttLimit = nil
+	rttLimit = 50
 
 	if config.dscp then
 		dscp = config.dscp
