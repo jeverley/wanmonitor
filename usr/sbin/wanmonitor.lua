@@ -218,7 +218,7 @@ local function interfaceReconnect(interface)
 end
 
 local function updatePingStatistics()
-	if not ping.clear then
+	if not ping.persist then
 		ping.clear = 0
 		ping.latent = 0
 		ping.persist = {}
