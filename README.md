@@ -72,6 +72,7 @@ egressTarget | decimal | Target rate percentage for the interface egress in deci
 ingressTarget | decimal | Target rate percentage for the interface ingress in decimal form 0 to 1 (optional) | 0.7 | 0.7 (70%)
 ingressDevice | string | Used to specify an alternative ingress device such as a veth or lan interface (optional) | br-lan |
 interval | decimal | Specifies the ping test interval in seconds (optional) | 0.5 | 0.5 seconds
+rtt | decimal | Specifies the link's typical uncongested ping milliseconds (optional) | 50 | 50
 hosts | list | Specify the remote hosts to ping tests (optional) || connectivitycheck.gstatic.com<br>www.msftconnecttest.com<br>ipv6.msftconnecttest.com<br>captive.apple.com
 iptype | string | Limit ping tests to a specific IP version (optional) | ipv4, ipv6 |
 verbose | boolean | Enable detailed output in the wanmonitor var status file (optional) | 0 or 1 | 0 (disabled)
