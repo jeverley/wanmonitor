@@ -34,7 +34,7 @@ local stableSeconds
 local assuredPeriod
 local reconnect
 local autorate
-local rttLimit
+local rtt
 local pingTargetCurve
 local verbose
 local logFolder
@@ -222,8 +222,8 @@ local function updatePingStatistics()
 		ping.clear = 0
 		ping.latent = 0
 		ping.persist = {}
-		if ping.current > rttLimit then
-			movingMedian(ping.persist, rttLimit)
+		if ping.current > rtt then
+			movingMedian(ping.persist, rtt)
 		end
 	end
 
@@ -745,7 +745,7 @@ local function initialise()
 	verbose = false
 	logFolder = nil
 	adjustmentLogFile = nil
-	rttLimit = 50
+	rtt = 50
 
 	if config.dscp then
 		dscp = config.dscp
@@ -912,12 +912,12 @@ local function initialise()
 		end
 	end
 
-	if config.rttLimit then
-		config.rttLimit = tonumber(config.rttLimit)
-		if not config.rttLimit or config.rttLimit <= 0 then
-			log("LOG_WARNING", "Invalid rttLimit config value specified for " .. interface)
+	if config.rtt then
+		config.rtt = tonumber(config.rtt)
+		if not config.rtt or config.rtt <= 0 then
+			log("LOG_WARNING", "Invalid rtt config value specified for " .. interface)
 		else
-			rttLimit = config.rttLimit
+			rtt = config.rtt
 		end
 	end
 
