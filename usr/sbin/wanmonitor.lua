@@ -99,22 +99,6 @@ local function median(values)
 	return sorted[middle + 0.5]
 end
 
-local function movingMedian(persist, observation)
-	if not persist.median or not persist.step then
-		persist.median = observation
-		persist.step = math.max(math.abs(observation / 2), 1)
-	end
-	if persist.median > observation then
-		persist.median = persist.median - persist.step
-	elseif persist.median < observation then
-		persist.median = persist.median + persist.step
-	end
-	if math.abs(observation - persist.median) < persist.step then
-		persist.step = persist.step / 2
-	end
-	return persist.median
-end
-
 local function movingMean(sample, value, period)
 	table.insert(sample, value)
 	while #sample > period do
@@ -218,18 +202,22 @@ local function interfaceReconnect(interface)
 end
 
 local function updatePingStatistics()
-	if not ping.persist then
+	if not ping.baseline then
 		ping.clear = 0
 		ping.latent = 0
-		ping.persist = {}
-		if ping.current > rtt then
-			movingMedian(ping.persist, rtt)
-		end
+		ping.baseline = rtt
 	end
 
-	ping.median = movingMedian(ping.persist, ping.current)
-	ping.limit = ping.median * 2
-	ping.target = ping.median * 1.2
+	local currentAlphaRttIncrease = 0.01
+	local currentAlphaRttDecrease = 0.9
+	if ping.current - ping.baseline >= 0 then
+		ping.baseline = (1 - currentAlphaRttIncrease) * ping.baseline + currentAlphaRttIncrease * ping.current
+	else
+		ping.baseline = (1 - currentAlphaRttDecrease) * ping.baseline + currentAlphaRttDecrease * ping.current
+	end
+
+	ping.limit = ping.baseline * 2
+	ping.target = ping.baseline * 1.5
 
 	if ping.current > ping.limit then
 		ping.clear = 0
@@ -529,7 +517,7 @@ local function writeStatus(file, mode)
 			device = device,
 			pingLimit = ping.limit,
 			pingTarget = ping.target,
-			pingMedian = ping.median,
+			pingBaseline = ping.baseline,
 			ping = ping.current,
 			egress = {
 				device = egress.device,
