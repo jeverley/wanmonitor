@@ -34,12 +34,11 @@ local longPeakPersistence
 local pingPersistence
 local stablePersistence
 local stableSeconds
-local assuredPeriod
+local stablePeriod
 local reconnect
 local autorate
 local rtt
 local verbose
-local logFolder
 local logFile
 
 local hostsCount
@@ -84,14 +83,14 @@ local function sum(values)
 	return total
 end
 
-local function mean(values)
-	return sum(values) / #values
+local function mean(sample)
+	return sum(sample) / #sample
 end
 
-local function median(values)
+local function median(sample)
 	local sorted = {}
-	for i = 1, #values do
-		table.insert(sorted, values[i])
+	for i = 1, #sample do
+		table.insert(sorted, sample[i])
 	end
 	table.sort(sorted)
 	local middle = #sorted * 0.5
@@ -101,8 +100,8 @@ local function median(values)
 	return sorted[middle + 0.5]
 end
 
-local function movingMean(sample, value, period)
-	table.insert(sample, value)
+local function movingMean(sample, observation, period)
+	table.insert(sample, observation)
 	while #sample > period do
 		table.remove(sample, 1)
 	end
@@ -217,7 +216,7 @@ local function updatePingStatistics()
 	end
 
 	ping.limit = ping.baseline * 2
-	ping.target = ping.baseline * 1.5
+	ping.target = ping.baseline * 1.3
 
 	if ping.current > ping.limit then
 		ping.clear = 0
@@ -236,17 +235,22 @@ end
 local function updateRateStatistics(qdisc)
 	if not qdisc.kind then
 		qdisc.assuredSample = nil
+		qdisc.rateSample = nil
 		qdisc.longPeak = nil
+		qdisc.shortPeak = nil
+		qdisc.mean = nil
 		qdisc.maximum = nil
 		qdisc.minimum = nil
-		qdisc.shortPeak = nil
 		qdisc.stable = nil
 		qdisc.target = nil
 		qdisc.utilisation = nil
 		return
 	end
 
-	qdisc.utilisation = qdisc.rate / qdisc.bandwidth
+	if not qdisc.rateSample then
+		qdisc.rateSample = {}
+	end
+	qdisc.mean = movingMean(qdisc.rateSample, qdisc.rate, stablePeriod)
 
 	local assured
 	if ping.current < ping.target then
@@ -257,7 +261,7 @@ local function updateRateStatistics(qdisc)
 	if not qdisc.assuredSample then
 		qdisc.assuredSample = {}
 	end
-	local assuredMean = movingMean(qdisc.assuredSample, assured, assuredPeriod)
+	local assuredMean = movingMean(qdisc.assuredSample, assured, stablePeriod)
 
 	if not qdisc.stable or ping.current < ping.target then
 		qdisc.stable = assuredMean
@@ -265,7 +269,9 @@ local function updateRateStatistics(qdisc)
 		qdisc.stable = qdisc.stable * stablePersistence + assuredMean * (1 - stablePersistence)
 	end
 
-	if not qdisc.shortPeak or qdisc.rate > qdisc.shortPeak then
+	if not qdisc.shortPeak then
+		qdisc.shortPeak = qdisc.bandwidth
+	elseif qdisc.rate > qdisc.shortPeak then
 		qdisc.shortPeak = qdisc.rate
 	else
 		qdisc.shortPeak = qdisc.shortPeak * shortPeakPersistence + qdisc.rate * (1 - shortPeakPersistence)
@@ -283,39 +289,45 @@ local function updateRateStatistics(qdisc)
 
 	qdisc.minimum = math.max(qdisc.shortPeak * qdisc.bandwidthTarget, qdisc.stable, qdisc.maximum * 0.01)
 	qdisc.target = math.max(qdisc.bandwidth * qdisc.bandwidthTarget, qdisc.maximum)
+	qdisc.utilisation = qdisc.rate / qdisc.bandwidth
 end
 
 local function calculateDecreaseChance(qdisc)
 	if not qdisc.kind then
-		qdisc.baselineDecreaseChance = nil
+		qdisc.decreaseChanceBaseline = nil
 		qdisc.decreaseChance = nil
-		qdisc.decreaseChanceReducer = nil
+		qdisc.decreaseChanceUtilisationReducer = nil
 		return
 	end
 
 	if ping.current < ping.limit then
-		qdisc.baselineDecreaseChance = 0
+		qdisc.decreaseChanceBaseline = 0
 		qdisc.decreaseChance = 0
-		qdisc.decreaseChanceReducer = 0
+		qdisc.decreaseChanceUtilisationReducer = 0
 		return
 	end
 
 	local baseline = (
-			qdisc.stable
+			qdisc.stable * 0.7
+			+ qdisc.mean * 0.3
 			+ qdisc.shortPeak * qdisc.bandwidthTarget * 0.9
 			+ qdisc.longPeak * qdisc.bandwidthTarget * 0.1
 		) * 0.5
-	qdisc.baselineDecreaseChance = (qdisc.rate - baseline) / baseline
+	qdisc.decreaseChanceBaseline = (qdisc.rate - baseline) / baseline
 
 	if qdisc.rate > qdisc.bandwidth then
-		qdisc.decreaseChanceReducer = (qdisc.bandwidth / qdisc.rate) ^ 4
+		qdisc.decreaseChanceUtilisationReducer = (qdisc.bandwidth / qdisc.rate) ^ 4
 	else
-		qdisc.decreaseChanceReducer = 1
+		qdisc.decreaseChanceUtilisationReducer = 1
 	end
-	qdisc.decreaseChance = qdisc.baselineDecreaseChance * qdisc.decreaseChanceReducer
+	qdisc.decreaseChance = qdisc.decreaseChanceBaseline * qdisc.decreaseChanceUtilisationReducer
+
+	if qdisc.cooldown == 0 then
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
+	end
 end
 
-local function amplifyDecreaseChanceDelta()
+local function adjustDecreaseChances()
 	if
 		not egress.decreaseChance
 		or not ingress.decreaseChance
@@ -325,10 +337,10 @@ local function amplifyDecreaseChanceDelta()
 		return
 	end
 
-	if egress.decreaseChanceReducer < ingress.decreaseChanceReducer then
-		egress.decreaseChance = egress.decreaseChance * ingress.decreaseChanceReducer
-	elseif egress.decreaseChanceReducer > ingress.decreaseChanceReducer then
-		ingress.decreaseChance = ingress.decreaseChance * egress.decreaseChanceReducer
+	if egress.decreaseChanceUtilisationReducer > ingress.decreaseChanceUtilisationReducer then
+		egress.decreaseChance = egress.decreaseChance * ingress.decreaseChanceUtilisationReducer
+	elseif egress.decreaseChanceUtilisationReducer < ingress.decreaseChanceUtilisationReducer then
+		ingress.decreaseChance = ingress.decreaseChance * egress.decreaseChanceUtilisationReducer
 	end
 
 	if egress.decreaseChance < ingress.decreaseChance then
@@ -363,7 +375,7 @@ local function calculateDecrease(qdisc)
 		qdisc.decreaseChance = 1
 	end
 
-	qdisc.change = (qdisc.bandwidth - qdisc.minimum) * interval * qdisc.decreaseChance * -1
+	qdisc.change = (qdisc.bandwidth - qdisc.rate * (1 + qdisc.bandwidthTarget) * 0.5) * qdisc.decreaseChance * -1
 	if qdisc.bandwidth + qdisc.change < qdisc.minimum then
 		qdisc.change = qdisc.minimum - qdisc.bandwidth
 	end
@@ -374,14 +386,12 @@ local function calculateDecrease(qdisc)
 end
 
 local function calculateIncrease(qdisc)
-	local pingMultiplier = 1 - ping.current / ping.target
-
 	local targetMultiplier = qdisc.target / qdisc.bandwidth
 	if targetMultiplier < 1 then
 		targetMultiplier = targetMultiplier ^ 20
 	end
 
-	qdisc.change = qdisc.bandwidth * 0.025 * interval * pingMultiplier * targetMultiplier
+	qdisc.change = qdisc.bandwidth * 0.1 * targetMultiplier
 
 	if qdisc.change < 0.008 then
 		qdisc.change = 0
@@ -402,10 +412,8 @@ local function calculateChange(qdisc)
 	if
 		ping.current < ping.target
 		and qdisc.cooldown == 0
-		and (
-			ping.clear >= stableSeconds and qdisc.stable > qdisc.bandwidth * 0.98
-			or ping.clear >= 10 and math.random(1, 100) <= 25
-		)
+		and ping.clear >= stableSeconds
+		and (qdisc.stable > qdisc.bandwidth * 0.98 or math.random(1, 100) <= 50 * interval)
 	then
 		calculateIncrease(qdisc)
 		return
@@ -420,10 +428,6 @@ local function getQdisc(qdisc)
 	end
 
 	local tc = jsonc.parse(execute("tc -j qdisc show dev " .. qdisc.device))
-
-	if tc[1].handle ~= qdisc.handle then
-		qdisc.target = nil
-	end
 
 	if
 		tc[1].kind ~= "cake"
@@ -468,6 +472,139 @@ local function updateQdisc(qdisc)
 	end
 end
 
+local function writeStatus()
+	if verbose then
+		writeFile(
+			statusFile,
+			jsonc.stringify({
+				interface = interface,
+				device = device,
+				ping = ping,
+				egress = egress,
+				ingress = ingress,
+			})
+		)
+		return
+	end
+
+	writeFile(
+		statusFile,
+		jsonc.stringify({
+			interface = interface,
+			device = device,
+			pingBaseline = ping.baseline,
+			ping = ping.current,
+			egress = {
+				device = egress.device,
+				target = egress.target,
+				bandwidth = egress.bandwidth,
+				maximum = egress.maximum,
+				rate = egress.rate,
+				change = egress.change,
+			},
+			ingress = {
+				device = ingress.device,
+				target = ingress.target,
+				bandwidth = ingress.bandwidth,
+				maximum = ingress.maximum,
+				rate = ingress.rate,
+				change = ingress.change,
+			},
+		})
+	)
+end
+
+local function adjustmentLog()
+	if not logFile and not console then
+		return
+	end
+
+	if
+		not (ingress.change and ingress.change ~= 0)
+		and not (egress.change and egress.change ~= 0)
+		and not (ping.current and ping.limit and ping.current > ping.limit)
+		and not verbose
+	then
+		return
+	end
+
+	local ingressRate = 0
+	local ingressUtilisation = 0
+	local ingressBandwidth = 0
+	local ingressDecreaseChance = 0
+	local ingressdecreaseChanceUtilisationReducer = 0
+	local ingressDecreaseChanceBaseline = 0
+	local egressRate = 0
+	local egressUtilisation = 0
+	local egressBandwidth = 0
+	local egressDecreaseChance = 0
+	local egressdecreaseChanceUtilisationReducer = 0
+	local egressDecreaseChanceBaseline = 0
+
+	if ingress.bandwidth then
+		ingressRate = ingress.rate
+		ingressUtilisation = ingress.utilisation
+		ingressBandwidth = ingress.bandwidth
+		ingressDecreaseChanceBaseline = ingress.decreaseChanceBaseline
+		ingressdecreaseChanceUtilisationReducer = ingress.decreaseChanceUtilisationReducer
+		ingressDecreaseChance = ingress.decreaseChance
+	end
+	if egress.bandwidth then
+		egressRate = egress.rate
+		egressUtilisation = egress.utilisation
+		egressBandwidth = egress.bandwidth
+		egressDecreaseChanceBaseline = egress.decreaseChanceBaseline
+		egressdecreaseChanceUtilisationReducer = egress.decreaseChanceUtilisationReducer
+		egressDecreaseChance = egress.decreaseChance
+	end
+
+	local logLine = string.format("%.4f", intervalEpoch)
+		.. ";	"
+		.. string.format("%.3f", ingressUtilisation)
+		.. ";	"
+		.. string.format("%.3f", egressUtilisation)
+		.. ";	"
+		.. string.format("%.2f", ping.baseline)
+		.. ";	"
+		.. string.format("%.2f", ping.current)
+		.. ";	"
+		.. string.format("%.2f", ping.current - ping.baseline)
+		.. ";	"
+		.. string.format("%.2f", ingressBandwidth)
+		.. ";	"
+		.. string.format("%.2f", egressBandwidth)
+		.. ";	"
+		.. string.format("%.2f", ingressRate)
+		.. ";	"
+		.. string.format("%.2f", egressRate)
+		.. ";	"
+		.. string.format(
+			"%.2f",
+			ingressDecreaseChanceBaseline * ingressdecreaseChanceUtilisationReducer
+		)
+		.. ";	"
+		.. string.format("%.2f", ingressDecreaseChance)
+		.. ";	"
+		.. string.format(
+			"%.2f",
+			egressDecreaseChanceBaseline * egressdecreaseChanceUtilisationReducer
+		)
+		.. ";	"
+		.. string.format(
+			"%.2f",
+			egressDecreaseChance
+		)
+		.. ";"
+
+	if console then
+		print(logLine)
+	end
+	if logFile then
+		os.execute("mkdir -p $(dirname '" .. logFile .. "')")
+		writeFile(logFile, logLine .. "\n", "a")
+	end
+end
+
 local function adjustSqm()
 	if not autorate or not egress.rate or not ingress.rate then
 		return
@@ -483,7 +620,7 @@ local function adjustSqm()
 
 	calculateDecreaseChance(egress)
 	calculateDecreaseChance(ingress)
-	amplifyDecreaseChanceDelta()
+	adjustDecreaseChances()
 
 	updateCooldown(egress)
 	updateCooldown(ingress)
@@ -493,117 +630,8 @@ local function adjustSqm()
 
 	updateQdisc(egress)
 	updateQdisc(ingress)
-end
 
-local function writeStatus(file, mode)
-	if not file then
-		file = statusFile
-	end
-
-	if verbose then
-		writeFile(
-			file,
-			jsonc.stringify({
-				interface = interface,
-				device = device,
-				ping = ping,
-				egress = egress,
-				ingress = ingress,
-			}),
-			mode
-		)
-		return
-	end
-
-	writeFile(
-		file,
-		jsonc.stringify({
-			interface = interface,
-			device = device,
-			pingLimit = ping.limit,
-			pingTarget = ping.target,
-			pingBaseline = ping.baseline,
-			ping = ping.current,
-			egress = {
-				device = egress.device,
-				target = egress.target,
-				bandwidth = egress.bandwidth,
-				maximum = egress.maximum,
-				shortPeak = egress.shortPeak,
-				longPeak = egress.longPeak,
-				rate = egress.rate,
-				stable = egress.stable,
-				decreaseChance = egress.decreaseChance,
-				change = egress.change,
-			},
-			ingress = {
-				device = ingress.device,
-				target = ingress.target,
-				bandwidth = ingress.bandwidth,
-				maximum = ingress.maximum,
-				shortPeak = ingress.shortPeak,
-				longPeak = ingress.longPeak,
-				rate = ingress.rate,
-				stable = ingress.stable,
-				decreaseChance = ingress.decreaseChance,
-				change = ingress.change,
-			},
-		}),
-		mode
-	)
-end
-
-local function updateLog()
-	if not logFile or not console then
-		return
-	end
-
-	if
-		not (ingress.change and ingress.change ~= 0)
-		and not (egress.change and egress.change ~= 0)
-		and not (ping.current and ping.limit and ping.current > ping.limit)
-	then
-		return
-	end
-
-	local ingressUtilisation = 0
-	local ingressBandwidth = 0
-	local egressUtilisation = 0
-	local egressBandwidth = 0
-
-	if ingress.bandwidth then
-		ingressUtilisation = ingress.utilisation
-		ingressBandwidth = ingress.bandwidth
-	end
-	if egress.bandwidth then
-		egressUtilisation = egress.utilisation
-		egressBandwidth = egress.bandwidth
-	end
-
-	local logLine = string.format("%.4f", intervalEpoch)
-		.. ";	"
-		.. string.format("%.2f", ingressUtilisation)
-		.. ";	"
-		.. string.format("%.2f", egressUtilisation)
-		.. ";	"
-		.. string.format("%.2f", ping.baseline)
-		.. ";	"
-		.. string.format("%.2f", ping.current)
-		.. ";	"
-		.. string.format("%.2f", ping.current - ping.baseline)
-		.. ";	"
-		.. string.format("%.2f", ingressBandwidth)
-		.. ";	"
-		.. string.format("%.2f", egressBandwidth)
-		.. ";"
-
-	if console then
-		print(logLine)
-	end
-	if logFile then
-		os.execute("mkdir -p " .. logFolder)
-		writeFile(logFile, logLine .. "\n", "a")
-	end
+	adjustmentLog()
 end
 
 local function statisticsInterval()
@@ -636,7 +664,6 @@ local function statisticsInterval()
 		ping.current = interval * 1000
 	end
 	adjustSqm()
-	updateLog()
 	writeStatus()
 end
 
@@ -659,7 +686,8 @@ local function processPingOutput(line)
 
 		if #pingResponseTimes > 0 then
 			pingStatus = 0
-			ping.current = median(pingResponseTimes)
+			--ping.current = median(pingResponseTimes)
+			ping.current = math.min(unpack(pingResponseTimes))
 		else
 			pingStatus = 1
 			ping.current = nil
@@ -672,17 +700,15 @@ local function processPingOutput(line)
 	elseif string.find(line, "Adding host .* failed: ") then
 		log("LOG_WARNING", line)
 		hostsCount = hostsCount - 1
-		pingStatus = 5
+		pingStatus = 4
 	elseif string.find(line, "ping_send failed: No such device") then
-		pingStatus = 5
+		pingStatus = 4
 	elseif
 		string.find(line, "^Hangup$")
 		or string.find(line, "^Killed$")
 		or string.find(line, "^Terminated$")
 		or string.find(line, " packets transmitted, .* received, .* packet loss, time .*ms")
 	then
-		pingStatus = 4
-	elseif string.find(line, "Usage: oping ") then
 		pingStatus = 3
 	elseif string.find(line, "ping_send failed: ") then
 		pingStatus = 2
@@ -744,8 +770,6 @@ local function initialise()
 		os.exit()
 	end
 
-	console = readArg("c", "console")
-
 	statusFile = "/var/wanmonitor." .. interface .. ".json"
 	pidFile = "/var/run/wanmonitor." .. interface .. ".pid"
 
@@ -776,11 +800,10 @@ local function initialise()
 	dscp = "CS6"
 	interval = 0.5
 	iptype = nil
-	reconnect = false
 	retries = 2
+	reconnect = false
 	autorate = false
 	verbose = false
-	logFolder = nil
 	logFile = nil
 	rtt = 50
 
@@ -844,7 +867,9 @@ local function initialise()
 		end
 	end
 
-	if config.verbose then
+	if readArg("v", "verbose") then
+		verbose = true
+	elseif config.verbose then
 		config.verbose = toboolean(config.verbose)
 		if config.verbose == nil then
 			log("LOG_WARNING", "Invalid verbose config value specified for " .. interface)
@@ -853,25 +878,31 @@ local function initialise()
 		end
 	end
 
-	if config.logFolder then
-		if not string.find(config.logFolder, "^/[^%$]*$") then
-			config.logFolder = nil
+	if readArg("l", "log") then
+		logFile = readArg("l", "log")
+	elseif config.logFile then
+		if not string.find(config.logFile, "^/[^%$]*$") then
+			config.logFile = nil
 		end
-		if config.logFolder == nil then
-			log("LOG_WARNING", "Invalid logFolder config value specified for " .. interface)
+		if config.logFile == nil then
+			log("LOG_WARNING", "Invalid logFile config value specified for " .. interface)
 		else
-			logFolder = config.logFolder
-			logFile = logFolder .. "/wanmonitor." .. interface .. ".log"
-			os.remove(logFile)
+			logFile = config.logFile
 		end
 	end
+
+	if logFile then
+		os.remove(logFile)
+	end
+
+	console = readArg("c", "console")
 
 	if not autorate then
 		return
 	end
 
-	pingIncreasePersistence = 0.99
-	pingDecreasePersistence = 0.2
+	pingIncreasePersistence = 0.985
+	pingDecreasePersistence = 0.05
 	shortPeakPersistence = 0.25
 	longPeakPersistence = 0.99
 	pingPersistence = 0.99
@@ -959,7 +990,9 @@ local function initialise()
 		end
 	end
 
-	assuredPeriod = stableSeconds / interval
+	stablePeriod = stableSeconds / interval
+	pingIncreasePersistence = pingIncreasePersistence ^ interval
+	pingDecreasePersistence = pingDecreasePersistence ^ interval
 	shortPeakPersistence = shortPeakPersistence ^ interval
 	longPeakPersistence = longPeakPersistence ^ interval
 	pingPersistence = pingPersistence ^ interval
@@ -978,6 +1011,7 @@ end
 local function main()
 	initialise()
 	signal.signal(signal.SIGHUP, exit)
+	signal.signal(signal.SIGINT, exit)
 	signal.signal(signal.SIGTERM, exit)
 
 	if not console then
@@ -990,10 +1024,10 @@ local function main()
 	retriesRemaining = retries
 	while retriesRemaining > 0 do
 		pingLoop()
-		if pingStatus == 5 then
+		if pingStatus == 4 then
 			interfaceReconnect(interface)
 		end
-		if pingStatus ~= 2 and pingStatus ~= 4 then
+		if pingStatus ~= 2 and pingStatus ~= 3 then
 			break
 		end
 		if pingStatus == 2 then
