@@ -1000,11 +1000,15 @@ local function main()
 	signal.signal(signal.SIGINT, exit)
 	signal.signal(signal.SIGTERM, exit)
 
-	if not console then
+	if console then
+		pid = unistd.getpid()
+		pidFile = nil
+	else
 		daemonise()
+		pid = unistd.getpid()
+		writeFile(pidFile, pid)
 	end
-	pid = unistd.getpid()
-	writeFile(pidFile, pid)
+
 	log("LOG_NOTICE", "Started for " .. interface .. " (" .. device .. ")")
 
 	retriesRemaining = retries
