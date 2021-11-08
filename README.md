@@ -39,10 +39,18 @@ chmod +x /etc/hotplug.d/iface/30-wanmonitor
 chmod +x /etc/init.d/wanmonitor
 ```
 
+
+
 Once the configuration file has been updated to match your local setup the service can be enabled and started by running the following commands from ssh:
 ```shell
 service wanmonitor enable
 service wanmonitor start
+```
+
+The service can also be run attached to a user shell, to do so execute a command using the '-c' argument, additionally passing '-v' will make the service print all intervals.
+
+```shell
+lua /usr/sbin/wanmonitor.lua -i wwan -c -v
 ```
 
 **The bandwidth configured for your engress/ingress under SQM setup are used by the service as starting points for adaptive bandwidth control.**
@@ -75,7 +83,8 @@ interval | decimal | Specifies the ping test interval in seconds (optional) | 0.
 rtt | decimal | Specifies the link's typical uncongested ping milliseconds (optional) | 50 | 50
 hosts | list | Specify the remote hosts to ping tests (optional) || connectivitycheck.gstatic.com<br>www.msftconnecttest.com<br>ipv6.msftconnecttest.com<br>captive.apple.com
 iptype | string | Limit ping tests to a specific IP version (optional) | ipv4, ipv6 |
-verbose | boolean | Enable detailed output in the wanmonitor var status file (optional) | 0 or 1 | 0 (disabled)
+verbose | boolean | Enable detailed output in the wanmonitor log file (optional) | 0 or 1 | 0 (disabled)
+logFile | string | File path for log file (optional) | /tmp/wanmonitor.wwan.log |
 
 # wan interface statistics
 The service updates a JSON var file under the path /var/wanmonitor.{interface}.json which includes current rate and ping metrics.
