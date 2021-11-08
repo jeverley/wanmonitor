@@ -21,6 +21,8 @@ local ping
 local pingStatus
 local statusFile
 local console
+local verbose
+local logFile
 
 local device
 local dscp
@@ -38,8 +40,6 @@ local stablePeriod
 local reconnect
 local autorate
 local rtt
-local verbose
-local logFile
 
 local hostsCount
 local pingResponseCount
@@ -85,19 +85,6 @@ end
 
 local function mean(sample)
 	return sum(sample) / #sample
-end
-
-local function median(sample)
-	local sorted = {}
-	for i = 1, #sample do
-		table.insert(sorted, sample[i])
-	end
-	table.sort(sorted)
-	local middle = #sorted * 0.5
-	if #sorted % 2 == 0 then
-		return (sorted[middle] + sorted[middle + 1]) * 0.5
-	end
-	return sorted[middle + 0.5]
 end
 
 local function movingMean(sample, observation, period)
@@ -686,7 +673,6 @@ local function processPingOutput(line)
 
 		if #pingResponseTimes > 0 then
 			pingStatus = 0
-			--ping.current = median(pingResponseTimes)
 			ping.current = math.min(unpack(pingResponseTimes))
 		else
 			pingStatus = 1
