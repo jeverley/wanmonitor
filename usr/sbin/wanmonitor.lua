@@ -20,12 +20,15 @@ local childPid
 local ping
 local pingStatus
 local statusFile
+local console
 
 local device
 local dscp
 local hosts
 local interval
 local iptype
+local pingIncreasePersistence
+local pingDecreasePersistence
 local shortPeakPersistence
 local longPeakPersistence
 local pingPersistence
@@ -35,10 +38,9 @@ local assuredPeriod
 local reconnect
 local autorate
 local rtt
-local pingTargetCurve
 local verbose
 local logFolder
-local adjustmentLogFile
+local logFile
 
 local hostsCount
 local pingResponseCount
@@ -208,12 +210,10 @@ local function updatePingStatistics()
 		ping.baseline = rtt
 	end
 
-	local currentAlphaRttIncrease = 0.01
-	local currentAlphaRttDecrease = 0.9
-	if ping.current - ping.baseline >= 0 then
-		ping.baseline = (1 - currentAlphaRttIncrease) * ping.baseline + currentAlphaRttIncrease * ping.current
+	if ping.current > ping.baseline then
+		ping.baseline = ping.baseline * pingIncreasePersistence + ping.current * (1 - pingIncreasePersistence)
 	else
-		ping.baseline = (1 - currentAlphaRttDecrease) * ping.baseline + currentAlphaRttDecrease * ping.current
+		ping.baseline = ping.baseline * pingDecreasePersistence + ping.current * (1 - pingDecreasePersistence)
 	end
 
 	ping.limit = ping.baseline * 2
@@ -235,15 +235,18 @@ end
 
 local function updateRateStatistics(qdisc)
 	if not qdisc.kind then
+		qdisc.assuredSample = nil
+		qdisc.longPeak = nil
 		qdisc.maximum = nil
 		qdisc.minimum = nil
 		qdisc.shortPeak = nil
-		qdisc.longPeak = nil
 		qdisc.stable = nil
-		qdisc.assuredSample = nil
 		qdisc.target = nil
+		qdisc.utilisation = nil
 		return
 	end
+
+	qdisc.utilisation = qdisc.rate / qdisc.bandwidth
 
 	local assured
 	if ping.current < ping.target then
@@ -356,9 +359,11 @@ local function updateCooldown(qdisc)
 end
 
 local function calculateDecrease(qdisc)
-	local pingMultiplier = 1 - (ping.limit / ping.current) ^ ping.latent
+	if qdisc.decreaseChance > 1 then
+		qdisc.decreaseChance = 1
+	end
 
-	qdisc.change = (qdisc.bandwidth - qdisc.minimum) * interval * pingMultiplier * qdisc.decreaseChance * -1
+	qdisc.change = (qdisc.bandwidth - qdisc.minimum) * interval * qdisc.decreaseChance * -1
 	if qdisc.bandwidth + qdisc.change < qdisc.minimum then
 		qdisc.change = qdisc.minimum - qdisc.bandwidth
 	end
@@ -548,14 +553,56 @@ local function writeStatus(file, mode)
 	)
 end
 
-local function updateChangeLog()
-	if not adjustmentLogFile then
+local function updateLog()
+	if not logFile or not console then
 		return
 	end
 
-	if (ingress.change and ingress.change > 0) or (egress.change and egress.change > 0) then
+	if
+		not (ingress.change and ingress.change ~= 0)
+		and not (egress.change and egress.change ~= 0)
+		and not (ping.current and ping.limit and ping.current > ping.limit)
+	then
+		return
+	end
+
+	local ingressUtilisation = 0
+	local ingressBandwidth = 0
+	local egressUtilisation = 0
+	local egressBandwidth = 0
+
+	if ingress.bandwidth then
+		ingressUtilisation = ingress.utilisation
+		ingressBandwidth = ingress.bandwidth
+	end
+	if egress.bandwidth then
+		egressUtilisation = egress.utilisation
+		egressBandwidth = egress.bandwidth
+	end
+
+	local logLine = string.format("%.4f", intervalEpoch)
+		.. ";	"
+		.. string.format("%.2f", ingressUtilisation)
+		.. ";	"
+		.. string.format("%.2f", egressUtilisation)
+		.. ";	"
+		.. string.format("%.2f", ping.baseline)
+		.. ";	"
+		.. string.format("%.2f", ping.current)
+		.. ";	"
+		.. string.format("%.2f", ping.current - ping.baseline)
+		.. ";	"
+		.. string.format("%.2f", ingressBandwidth)
+		.. ";	"
+		.. string.format("%.2f", egressBandwidth)
+		.. ";"
+
+	if console then
+		print(logLine)
+	end
+	if logFile then
 		os.execute("mkdir -p " .. logFolder)
-		writeStatus(adjustmentLogFile, "a")
+		writeFile(logFile, logLine .. "\n", "a")
 	end
 end
 
@@ -589,7 +636,7 @@ local function statisticsInterval()
 		ping.current = interval * 1000
 	end
 	adjustSqm()
-	updateChangeLog()
+	updateLog()
 	writeStatus()
 end
 
@@ -697,6 +744,8 @@ local function initialise()
 		os.exit()
 	end
 
+	console = readArg("c", "console")
+
 	statusFile = "/var/wanmonitor." .. interface .. ".json"
 	pidFile = "/var/run/wanmonitor." .. interface .. ".pid"
 
@@ -732,7 +781,7 @@ local function initialise()
 	autorate = false
 	verbose = false
 	logFolder = nil
-	adjustmentLogFile = nil
+	logFile = nil
 	rtt = 50
 
 	if config.dscp then
@@ -812,8 +861,8 @@ local function initialise()
 			log("LOG_WARNING", "Invalid logFolder config value specified for " .. interface)
 		else
 			logFolder = config.logFolder
-			adjustmentLogFile = logFolder .. "/wanmonitor." .. interface .. ".log.json"
-			os.remove(adjustmentLogFile)
+			logFile = logFolder .. "/wanmonitor." .. interface .. ".log"
+			os.remove(logFile)
 		end
 	end
 
@@ -821,7 +870,8 @@ local function initialise()
 		return
 	end
 
-	pingTargetCurve = 0.7
+	pingIncreasePersistence = 0.99
+	pingDecreasePersistence = 0.2
 	shortPeakPersistence = 0.25
 	longPeakPersistence = 0.99
 	pingPersistence = 0.99
@@ -909,15 +959,6 @@ local function initialise()
 		end
 	end
 
-	if config.pingTargetCurve then
-		config.pingTargetCurve = tonumber(config.pingTargetCurve)
-		if not config.pingTargetCurve or config.pingTargetCurve <= 0 then
-			log("LOG_WARNING", "Invalid pingTargetCurve config value specified for " .. interface)
-		else
-			pingTargetCurve = config.pingTargetCurve
-		end
-	end
-
 	assuredPeriod = stableSeconds / interval
 	shortPeakPersistence = shortPeakPersistence ^ interval
 	longPeakPersistence = longPeakPersistence ^ interval
@@ -939,7 +980,9 @@ local function main()
 	signal.signal(signal.SIGHUP, exit)
 	signal.signal(signal.SIGTERM, exit)
 
-	daemonise()
+	if not console then
+		daemonise()
+	end
 	pid = unistd.getpid()
 	writeFile(pidFile, pid)
 	log("LOG_NOTICE", "Started for " .. interface .. " (" .. device .. ")")
