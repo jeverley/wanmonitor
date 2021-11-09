@@ -882,7 +882,7 @@ local function initialise()
 
 	local logFileArg = readArg("l", "log")
 	if logFileArg then
-		if type(logFileArg) == "string" and string.find(config.logFile, "^/[^%$]*$") then
+		if type(logFileArg) == "string" and string.find(logFileArg, "^/[^%$]*$") then
 			logFile = logFileArg
 		else
 			log("LOG_WARNING", "Invalid log arguement path")
