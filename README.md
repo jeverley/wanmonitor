@@ -92,30 +92,25 @@ Example below:
 
 ```json
 {
-  "ping": 48.56,
-  "device": "wwan0",
-  "egress": {
-    "change": 0,
-    "maximum": 115.47821693868875,
+    "ping": 34.359999999999999,
+    "pingBaseline": 28.62471516775733,
     "device": "wwan0",
-    "peak": 2058.9358297866193,
-    "decreaseChance": 0,
-    "bandwidth": 1971.064,
-    "target": 1647.1486638292954,
-    "stable": 123.19589644945944,
-    "rate": 101.49652326663251
-  },
-  "ingress": {
-    "change": 3.407471957072835,
-    "maximum": 12762.418651098951,
-    "device": "br-lan",
-    "peak": 34640.78843586186,
-    "decreaseChance": 0,
-    "bandwidth": 27601.920000000002,
-    "target": 24248.5519051033,
-    "stable": 12299.174989053196,
-    "rate": 12762.418651098951
-  },
-  "interface": "wwan"
+    "egress": {
+        "bandwidth": 981.91200000000003,
+        "maximum": 1385.8266554230368,
+        "device": "wwan0",
+        "change": 0,
+        "rate": 407.34954748331836,
+        "target": 1385.8266554230368
+    },
+    "ingress": {
+        "bandwidth": 19777.312000000002,
+        "maximum": 31009.577300174991,
+        "device": "br-lan",
+        "change": 0,
+        "rate": 11464.306138738317,
+        "target": 31009.577300174991
+    },
+    "interface": "wwan"
 }
 ```
