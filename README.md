@@ -1,7 +1,7 @@
 Copyright 2021 Jack Everley
 
 # wanmonitor
-A set of scripts providing WAN interface monitoring and adaptive bandwidth for SQM Cake on OpenWrt routers.
+A lua service providing WAN interface monitoring and adaptive bandwidth for SQM on OpenWrt routers.
 
 The main lua executable currently supports the folling features:
 
