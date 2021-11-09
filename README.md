@@ -5,10 +5,9 @@ A lua service providing WAN interface monitoring and adaptive bandwidth for SQM 
 
 The main lua executable currently supports the folling features:
 
-* Autorate of both ingress and egress (comparing metrics in each direction to determine the most likely cause of latency)
-* Support for monitoring multiple wan interfaces in parallel
+* Adaptive bandwidth for both ingress and egress
+* Support for monitoring multiple wan interfaces
 * Polling of multiple remote hosts during each statistics interval (using the oping binary)
-* Statistic intervals less than 1 second
 * Automatic reconnect of non-responsive WAN interfaces
 * Automatic detection of SQM configuration changes
 * All configuration is managed using the standard OpenWrt configuration format
@@ -26,7 +25,7 @@ Scipt files should be placed in the OpenWrt router filesystem according to the r
 * /etc/hotplug.d/iface/30-wanmonitor
 * /etc/init.d/wanmonitor
 
-The following ssh commands can be used to achieve this:
+The following shell commands can be used to install the service:
 
 ```shell
 opkg update
@@ -41,19 +40,23 @@ chmod +x /etc/init.d/wanmonitor
 
 
 
-Once the configuration file has been updated to match your local setup the service can be enabled and started by running the following commands from ssh:
+Once the configuration file has been updated to match your local setup the service can be enabled and started by running the following commands from shell:
 ```shell
 service wanmonitor enable
 service wanmonitor start
 ```
 
-The service can also be run attached to a user shell, to do so execute a command using the '-c' argument, additionally passing '-v' will make the service print all intervals.
+The service can alternatively be run attached to a user shell (ensure the device is stopped first), to do so execute a command using the '-c' argument, additionally passing '-v' will make the service print all intervals.
 
 ```shell
 lua /usr/sbin/wanmonitor.lua -i wwan -c -v
 ```
+An additional argument -l can be used to specify a log file path.
+```shell
+lua /usr/sbin/wanmonitor.lua -i wwan -c -v -l /tmp/wanmonitor.wwan.log
+```
 
-**The bandwidth configured for your engress/ingress under SQM setup are used by the service as starting points for adaptive bandwidth control.**
+**The bandwidth rates configured for your download/upload under SQM setup are used by the service as starting points for adaptive bandwidth control.**
 
 # wanmonitor configuration options
 The service configuration is controlled through the config file:
@@ -61,15 +64,13 @@ The service configuration is controlled through the config file:
 
 A valid WAN interface name should be specified for each wanmonitor config section.
 
-It is recommended that the ingress and egress target parateters are set in the 0.7-0.8 range (exact values will depend on your setup).
+It is recommended that the ingress and egress target parateters are set in the 0.7-0.8 range for a LTE link, please start with the defaults (exact values will depend on your setup).
 
 **The values do not determine the link's maximum bandwith, they are used in the metric comparisons to account for rate jitter.**
 
 Note that these should be configured to match the troughs of a saturated line rate as shown below:
 
 ![image](https://user-images.githubusercontent.com/46714706/139727270-ac732c63-e33d-4d1b-abb5-711700062220.png)
-
-Good starting values are 0.7 for ingress and 0.8 for egress.
 
 Option | Type | Description | Examples | Default
 ------------ | ------------- | ------------- | ------------- | -------------
