@@ -61,8 +61,12 @@ local function cleanup()
 	if childPid then
 		signal.kill(childPid, signal.SIGKILL)
 	end
-	os.remove(statusFile)
-	os.remove(pidFile)
+	if pidFile then
+		os.remove(pidFile)
+	end
+	if statusFile then
+		os.remove(statusFile)
+	end
 end
 
 local function exit()
@@ -202,8 +206,8 @@ local function updatePingStatistics()
 		ping.baseline = ping.baseline * pingDecreasePersistence + ping.current * (1 - pingDecreasePersistence)
 	end
 
-	ping.limit = ping.baseline * 2
-	ping.target = ping.baseline * 1.3
+	ping.limit = ping.baseline * 1.9
+	ping.target = ping.baseline * 1.4
 
 	if ping.current > ping.limit then
 		ping.clear = 0
@@ -212,6 +216,8 @@ local function updatePingStatistics()
 	end
 
 	if ping.current > ping.target then
+		ping.clear = 0
+		ping.latent = 0
 		return
 	end
 
@@ -234,21 +240,20 @@ local function updateRateStatistics(qdisc)
 		return
 	end
 
-	if not qdisc.rateSample then
-		qdisc.rateSample = {}
-	end
-	qdisc.mean = movingMean(qdisc.rateSample, qdisc.rate, stablePeriod)
-
-	local assured
-	if ping.current < ping.target then
-		assured = qdisc.rate
-	else
-		assured = qdisc.rate * qdisc.bandwidthTarget
-	end
 	if not qdisc.assuredSample then
 		qdisc.assuredSample = {}
 	end
+	if not qdisc.rateSample then
+		qdisc.rateSample = {}
+	end
+
+	local assured = qdisc.rate
+	if ping.current > ping.target then
+		assured = assured * qdisc.bandwidthTarget
+	end
+
 	local assuredMean = movingMean(qdisc.assuredSample, assured, stablePeriod)
+	qdisc.mean = movingMean(qdisc.rateSample, qdisc.rate, stablePeriod)
 
 	if not qdisc.stable or ping.current < ping.target then
 		qdisc.stable = assuredMean
@@ -274,66 +279,84 @@ local function updateRateStatistics(qdisc)
 		qdisc.maximum = assured
 	end
 
-	qdisc.minimum = math.max(qdisc.shortPeak * qdisc.bandwidthTarget, qdisc.stable, qdisc.maximum * 0.01)
+	qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01)
 	qdisc.target = math.max(qdisc.bandwidth * qdisc.bandwidthTarget, qdisc.maximum)
 	qdisc.utilisation = qdisc.rate / qdisc.bandwidth
 end
 
 local function calculateDecreaseChance(qdisc)
-	if not qdisc.kind then
-		qdisc.decreaseChanceBaseline = nil
+	if not qdisc.kind or ping.current < ping.limit then
+		qdisc.baselineComparision = nil
 		qdisc.decreaseChance = nil
-		qdisc.decreaseChanceUtilisationReducer = nil
+		qdisc.decreaseChanceReducer = nil
+		qdisc.oppositeChanceReducer = nil
 		return
 	end
 
-	if ping.current < ping.limit then
-		qdisc.decreaseChanceBaseline = 0
-		qdisc.decreaseChance = 0
-		qdisc.decreaseChanceUtilisationReducer = 0
-		return
-	end
+	local baseline = qdisc.stable * 0.35
+		+ qdisc.mean * 0.15
+		+ qdisc.shortPeak * qdisc.bandwidthTarget * 0.45
+		+ qdisc.longPeak * qdisc.bandwidthTarget * 0.05
+	qdisc.baselineComparision = (qdisc.rate - baseline) / baseline
+	qdisc.decreaseChance = qdisc.baselineComparision
 
-	local baseline = (
-			qdisc.stable * 0.7
-			+ qdisc.mean * 0.3
-			+ qdisc.shortPeak * qdisc.bandwidthTarget * 0.9
-			+ qdisc.longPeak * qdisc.bandwidthTarget * 0.1
-		) * 0.5
-	qdisc.decreaseChanceBaseline = (qdisc.rate - baseline) / baseline
-
-	if qdisc.rate > qdisc.bandwidth then
-		qdisc.decreaseChanceUtilisationReducer = (qdisc.bandwidth / qdisc.rate) ^ 4
+	if qdisc.utilisation > 1.01 then
+		qdisc.decreaseChanceReducer = 1
+		qdisc.oppositeChanceReducer = 0.5 / qdisc.utilisation
+	elseif qdisc.utilisation > 0.98 then
+		qdisc.decreaseChanceReducer = 0.3
+		qdisc.oppositeChanceReducer = 0.5
 	else
-		qdisc.decreaseChanceUtilisationReducer = 1
+		qdisc.decreaseChanceReducer = 1
+		qdisc.oppositeChanceReducer = nil
 	end
-	qdisc.decreaseChance = qdisc.decreaseChanceBaseline * qdisc.decreaseChanceUtilisationReducer
 
-	if qdisc.cooldown == 0 then
-		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
+	if ping.latent == interval or qdisc.cooldown == 0 then
+		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.2
+	end
+
+	if qdisc.decreaseChance <= 0 then
+		qdisc.decreaseChance = nil
+	else
+		local pingReducer = 1 - (ping.limit * 0.99 / ping.current) ^ 4
+		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.decreaseChanceReducer * pingReducer
 	end
 end
 
 local function adjustDecreaseChances()
-	if
-		not egress.decreaseChance
-		or not ingress.decreaseChance
-		or egress.decreaseChance <= 0
-		or ingress.decreaseChance <= 0
-	then
-		return
+	if egress.decreaseChance and ingress.oppositeChanceReducer then
+		egress.decreaseChance = egress.decreaseChance * ingress.oppositeChanceReducer
+	end
+	if ingress.decreaseChance and egress.oppositeChanceReducer then
+		ingress.decreaseChance = ingress.decreaseChance * egress.oppositeChanceReducer
 	end
 
-	if egress.decreaseChanceUtilisationReducer > ingress.decreaseChanceUtilisationReducer then
-		egress.decreaseChance = egress.decreaseChance * ingress.decreaseChanceUtilisationReducer
-	elseif egress.decreaseChanceUtilisationReducer < ingress.decreaseChanceUtilisationReducer then
-		ingress.decreaseChance = ingress.decreaseChance * egress.decreaseChanceUtilisationReducer
-	end
-
-	if egress.decreaseChance < ingress.decreaseChance then
-		egress.decreaseChance = egress.decreaseChance * (egress.decreaseChance / ingress.decreaseChance) ^ 15
-	elseif egress.decreaseChance > ingress.decreaseChance then
-		ingress.decreaseChance = ingress.decreaseChance * (ingress.decreaseChance / egress.decreaseChance) ^ 15
+	local amplification = 10
+	if egress.decreaseChance and not ingress.decreaseChance then
+		if egress.decreaseChance > 1 then
+			egress.decreaseChance = 1
+		end
+	elseif not egress.decreaseChance and ingress.decreaseChance then
+		if ingress.decreaseChance > 1 then
+			ingress.decreaseChance = 1
+		end
+	elseif egress.decreaseChance and ingress.decreaseChance then
+		if egress.decreaseChance > ingress.decreaseChance then
+			if egress.decreaseChance > 1 then
+				ingress.decreaseChance = ingress.decreaseChance / egress.decreaseChance
+				egress.decreaseChance = 1
+			end
+			ingress.decreaseChance = ingress.decreaseChance * (ingress.decreaseChance / egress.decreaseChance) ^ amplification
+		elseif ingress.decreaseChance > egress.decreaseChance then
+			if ingress.decreaseChance > 1 then
+				egress.decreaseChance = egress.decreaseChance / ingress.decreaseChance
+				ingress.decreaseChance = 1
+			end
+			egress.decreaseChance = egress.decreaseChance * (egress.decreaseChance / ingress.decreaseChance) ^ amplification
+		elseif egress.decreaseChance == ingress.decreaseChance and egress.decreaseChance > 1 then
+			egress.decreaseChance = 1
+			ingress.decreaseChance = 1
+		end
 	end
 end
 
@@ -347,22 +370,18 @@ local function updateCooldown(qdisc)
 		qdisc.cooldown = 0
 	end
 
-	if qdisc.decreaseChance and qdisc.decreaseChance > 0 then
+	if qdisc.decreaseChance and qdisc.decreaseChance > 0.01 then
 		qdisc.cooldown = qdisc.cooldown + interval
 		return
 	end
 
-	if ping.current < ping.target and qdisc.cooldown > 0 then
+	if ping.current < ping.limit and qdisc.cooldown > 0 then
 		qdisc.cooldown = qdisc.cooldown - interval
 	end
 end
 
 local function calculateDecrease(qdisc)
-	if qdisc.decreaseChance > 1 then
-		qdisc.decreaseChance = 1
-	end
-
-	qdisc.change = (qdisc.bandwidth - qdisc.rate * (1 + qdisc.bandwidthTarget) * 0.5) * qdisc.decreaseChance * -1
+	qdisc.change = (qdisc.bandwidth - qdisc.rate * 0.5) * qdisc.decreaseChance * -1
 	if qdisc.bandwidth + qdisc.change < qdisc.minimum then
 		qdisc.change = qdisc.minimum - qdisc.bandwidth
 	end
@@ -391,7 +410,7 @@ local function calculateChange(qdisc)
 		return
 	end
 
-	if qdisc.decreaseChance and qdisc.decreaseChance > 0 and qdisc.rate > qdisc.minimum then
+	if qdisc.decreaseChance and qdisc.rate > qdisc.minimum then
 		calculateDecrease(qdisc)
 		return
 	end
@@ -515,33 +534,33 @@ local function adjustmentLog()
 		return
 	end
 
-	local ingressRate = 0
 	local ingressUtilisation = 0
 	local ingressBandwidth = 0
+	local ingressBaselineComparision = 0
 	local ingressDecreaseChance = 0
-	local ingressdecreaseChanceUtilisationReducer = 0
-	local ingressDecreaseChanceBaseline = 0
-	local egressRate = 0
-	local egressUtilisation = 0
-	local egressBandwidth = 0
-	local egressDecreaseChance = 0
-	local egressdecreaseChanceUtilisationReducer = 0
-	local egressDecreaseChanceBaseline = 0
-
 	if ingress.bandwidth then
-		ingressRate = ingress.rate
 		ingressUtilisation = ingress.utilisation
 		ingressBandwidth = ingress.bandwidth
-		ingressDecreaseChanceBaseline = ingress.decreaseChanceBaseline
-		ingressdecreaseChanceUtilisationReducer = ingress.decreaseChanceUtilisationReducer
+	end
+	if ingress.baselineComparision then
+		ingressBaselineComparision = ingress.baselineComparision
+	end
+	if ingress.decreaseChance then
 		ingressDecreaseChance = ingress.decreaseChance
 	end
+
+	local egressUtilisation = 0
+	local egressBandwidth = 0
+	local egressBaselineComparision = 0
+	local egressDecreaseChance = 0
 	if egress.bandwidth then
-		egressRate = egress.rate
 		egressUtilisation = egress.utilisation
 		egressBandwidth = egress.bandwidth
-		egressDecreaseChanceBaseline = egress.decreaseChanceBaseline
-		egressdecreaseChanceUtilisationReducer = egress.decreaseChanceUtilisationReducer
+	end
+	if egress.baselineComparision then
+		egressBaselineComparision = egress.baselineComparision
+	end
+	if egress.decreaseChance then
 		egressDecreaseChance = egress.decreaseChance
 	end
 
@@ -561,20 +580,17 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egressBandwidth)
 		.. ";	"
-		.. string.format("%.2f", ingressRate)
+		.. string.format("%.2f", ingress.rate)
 		.. ";	"
-		.. string.format("%.2f", egressRate)
+		.. string.format("%.2f", egress.rate)
 		.. ";	"
-		.. string.format(
-			"%.2f",
-			ingressDecreaseChanceBaseline * ingressdecreaseChanceUtilisationReducer
-		)
+		.. string.format("%.2f", ingressBaselineComparision)
 		.. ";	"
 		.. string.format("%.2f", ingressDecreaseChance)
 		.. ";	"
 		.. string.format(
 			"%.2f",
-			egressDecreaseChanceBaseline * egressdecreaseChanceUtilisationReducer
+			egressBaselineComparision
 		)
 		.. ";	"
 		.. string.format(
@@ -864,8 +880,13 @@ local function initialise()
 		end
 	end
 
-	if readArg("l", "log") then
-		logFile = readArg("l", "log")
+	local logFileArg = readArg("l", "log")
+	if logFileArg then
+		if type(logFileArg) == "string" and string.find(config.logFile, "^/[^%$]*$") then
+			logFile = logFileArg
+		else
+			log("LOG_WARNING", "Invalid log arguement path")
+		end
 	elseif config.logFile then
 		if not string.find(config.logFile, "^/[^%$]*$") then
 			config.logFile = nil
@@ -889,8 +910,8 @@ local function initialise()
 
 	pingIncreasePersistence = 0.985
 	pingDecreasePersistence = 0.05
-	shortPeakPersistence = 0.25
-	longPeakPersistence = 0.99
+	shortPeakPersistence = 0.1
+	longPeakPersistence = 0.98
 	pingPersistence = 0.99
 	stablePersistence = 0.9
 	stableSeconds = 2
