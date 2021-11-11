@@ -77,7 +77,7 @@ Option | Type | Description | Examples | Default
 enabled | boolean | Enable monitoring for an interface | 0 or 1 | 0 (disabled)
 reconnect | boolean | Enable automatic reconnect of an interface that loses connectivity (optional) | 0 or 1 | 0 (disabled)
 autorate | boolean | Enable automatic rate adjustment for interface SQM cake qdiscs (optional) | 0 or 1 | 0 (disabled)
-egressTarget | decimal | Target rate percentage for the interface egress in decimal form 0 to 1 (optional) | 0.8| 0.8 (80%)
+egressTarget | decimal | Target rate percentage for the interface egress in decimal form 0 to 1 (optional) | 0.7| 0.7 (70%)
 ingressTarget | decimal | Target rate percentage for the interface ingress in decimal form 0 to 1 (optional) | 0.7 | 0.7 (70%)
 ingressDevice | string | Used to specify an alternative ingress device such as a veth or lan interface (optional) | br-lan |
 interval | decimal | Specifies the ping test interval in seconds (optional) | 0.5 | 0.5 seconds
@@ -85,6 +85,7 @@ rtt | decimal | Specifies the link's typical uncongested ping milliseconds (opti
 hosts | list | Specify the remote hosts to ping tests (optional) || connectivitycheck.gstatic.com<br>www.msftconnecttest.com<br>ipv6.msftconnecttest.com<br>captive.apple.com
 iptype | string | Limit ping tests to a specific IP version (optional) | ipv4, ipv6 |
 verbose | boolean | Enable detailed output in the wanmonitor log file (optional) | 0 or 1 | 0 (disabled)
+mssJitterfix | boolean | Clamp/unclamp TCP MSS to 540 to reduce jitter if bandwidth falls below/rises above 3000kbps (optional) | 0 or 1 | 0 (disabled)
 logFile | string | File path for log file (optional) | /tmp/wanmonitor.wwan.log |
 
 # wan interface statistics
