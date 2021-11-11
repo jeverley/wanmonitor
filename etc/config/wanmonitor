@@ -10,5 +10,6 @@ config interface 'wwan'
 	option reconnect '1'
 	option autorate '1'
 	option rtt '50'
-	option egressTarget '0.8'
+	option egressTarget '0.7'
 	option ingressTarget '0.7'
+	option mssJitterFix '0
