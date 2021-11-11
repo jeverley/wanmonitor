@@ -989,7 +989,7 @@ local function initialise()
 	pingPersistence = 0.99
 	stablePersistence = 0.9
 	stableSeconds = 2
-	egress.bandwidthTarget = 0.8
+	egress.bandwidthTarget = 0.7
 	ingress.bandwidthTarget = 0.7
 	egress.device = device
 
