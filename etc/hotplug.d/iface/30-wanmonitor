@@ -3,19 +3,11 @@
 
 [ -n "$INTERFACE" ] || exit 0
 
-[ -f "/usr/lib/sqm/run.sh" ] && ingressDevice=$(uci -q get "wanmonitor.${INTERFACE}.ingressDevice")
-[ "$ingressDevice" = "${DEVICE}" ] && ingressDevice=""
-
 [ "$ACTION" = ifup ] && {
     /etc/init.d/wanmonitor stop "${INTERFACE}"
-    [ -n "$ingressDevice" ] && {
-        /usr/lib/sqm/run.sh stop "${ingressDevice}"
-        /usr/lib/sqm/run.sh start "${ingressDevice}"
-    }
     /etc/init.d/wanmonitor enabled && /etc/init.d/wanmonitor start "${INTERFACE}"
 }
 
 [ "$ACTION" = ifdown ] && {
     /etc/init.d/wanmonitor stop "${INTERFACE}"
-    [ -n "$ingressDevice" ] && /usr/lib/sqm/run.sh stop "${ingressDevice}"
 }
