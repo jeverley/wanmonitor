@@ -55,6 +55,9 @@ local function log(priority, message)
 	syslog.openlog("wanmonitor", syslog.LOG_PID, syslog.LOG_DAEMON)
 	syslog.syslog(syslog[priority], message)
 	syslog.closelog()
+	if console then
+		print(message)
+	end
 end
 
 local function cleanup()
@@ -72,6 +75,11 @@ end
 local function exit()
 	cleanup()
 	os.exit()
+end
+
+local function resetMssClamp()
+	egress.mssClamp = nil
+	ingress.mssClamp = nil
 end
 
 local function epoch()
@@ -157,11 +165,12 @@ local function readArg(short, long)
 	return present
 end
 
-local function uciGet(config, section, option)
+local function uciGet(config, section, option, sectionType)
 	local response = jsonc.parse(execute("ubus call uci get '" .. jsonc.stringify({
 		config = config,
 		section = section,
 		option = option,
+		type = sectionType,
 	}) .. "'"))
 
 	if not response then
@@ -171,6 +180,18 @@ local function uciGet(config, section, option)
 		return response.values
 	end
 	return response.value
+end
+
+local function wanFirewallConfig()
+	local zones = uciGet("firewall", nil, nil, "zone")
+	if not zones then
+		return
+	end
+	for k, v in pairs(zones) do
+		if v.name == "wan" then
+			return v
+		end
+	end
 end
 
 local function interfaceStatus(interface)
@@ -293,12 +314,11 @@ local function calculateDecreaseChance(qdisc)
 		return
 	end
 
-	local baseline = qdisc.stable * 0.35
-		+ qdisc.mean * 0.15
+	local baseline = qdisc.stable * 0.4
+		+ qdisc.mean * 0.1
 		+ qdisc.shortPeak * qdisc.bandwidthTarget * 0.45
 		+ qdisc.longPeak * qdisc.bandwidthTarget * 0.05
 	qdisc.baselineComparision = (qdisc.rate - baseline) / baseline
-	qdisc.decreaseChance = qdisc.baselineComparision
 
 	if qdisc.utilisation > 1.01 then
 		qdisc.decreaseChanceReducer = 1
@@ -312,18 +332,22 @@ local function calculateDecreaseChance(qdisc)
 	end
 
 	if ping.latent == interval or qdisc.cooldown == 0 then
-		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.2
+		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
 
-	if qdisc.decreaseChance <= 0 then
+	if qdisc.baselineComparision <= 0 then
 		qdisc.decreaseChance = nil
 	else
 		local pingReducer = 1 - (ping.limit * 0.99 / ping.current) ^ 4
-		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.decreaseChanceReducer * pingReducer
+		qdisc.decreaseChance = qdisc.baselineComparision * qdisc.decreaseChanceReducer * pingReducer
 	end
 end
 
 local function adjustDecreaseChances()
+	if not egress.decreaseChance and not ingress.decreaseChance then
+		return
+	end
+
 	if egress.decreaseChance and ingress.oppositeChanceReducer then
 		egress.decreaseChance = egress.decreaseChance * ingress.oppositeChanceReducer
 	end
@@ -336,27 +360,26 @@ local function adjustDecreaseChances()
 		if egress.decreaseChance > 1 then
 			egress.decreaseChance = 1
 		end
-	elseif not egress.decreaseChance and ingress.decreaseChance then
+	elseif ingress.decreaseChance and not egress.decreaseChance then
 		if ingress.decreaseChance > 1 then
 			ingress.decreaseChance = 1
 		end
-	elseif egress.decreaseChance and ingress.decreaseChance then
-		if egress.decreaseChance > ingress.decreaseChance then
-			if egress.decreaseChance > 1 then
-				ingress.decreaseChance = ingress.decreaseChance / egress.decreaseChance
-				egress.decreaseChance = 1
-			end
-			ingress.decreaseChance = ingress.decreaseChance * (ingress.decreaseChance / egress.decreaseChance) ^ amplification
-		elseif ingress.decreaseChance > egress.decreaseChance then
-			if ingress.decreaseChance > 1 then
-				egress.decreaseChance = egress.decreaseChance / ingress.decreaseChance
-				ingress.decreaseChance = 1
-			end
-			egress.decreaseChance = egress.decreaseChance * (egress.decreaseChance / ingress.decreaseChance) ^ amplification
-		elseif egress.decreaseChance == ingress.decreaseChance and egress.decreaseChance > 1 then
+	elseif egress.decreaseChance > ingress.decreaseChance then
+		if egress.decreaseChance > 1 then
+			ingress.decreaseChance = ingress.decreaseChance / egress.decreaseChance
 			egress.decreaseChance = 1
+		end
+		ingress.decreaseChance = ingress.decreaseChance
+			* (ingress.decreaseChance / egress.decreaseChance) ^ amplification
+	elseif ingress.decreaseChance > egress.decreaseChance then
+		if ingress.decreaseChance > 1 then
+			egress.decreaseChance = egress.decreaseChance / ingress.decreaseChance
 			ingress.decreaseChance = 1
 		end
+		egress.decreaseChance = egress.decreaseChance * (egress.decreaseChance / ingress.decreaseChance) ^ amplification
+	elseif egress.decreaseChance > 1 then
+		egress.decreaseChance = 1
+		ingress.decreaseChance = 1
 	end
 end
 
@@ -419,7 +442,7 @@ local function calculateChange(qdisc)
 		ping.current < ping.target
 		and qdisc.cooldown == 0
 		and ping.clear >= stableSeconds
-		and (qdisc.stable > qdisc.bandwidth * 0.98 or math.random(1, 100) <= 50 * interval)
+		and (qdisc.stable > qdisc.bandwidth * 0.95 or math.random(1, 10) <= 5 * interval)
 	then
 		calculateIncrease(qdisc)
 		return
@@ -439,19 +462,16 @@ local function getQdisc(qdisc)
 		tc[1].kind ~= "cake"
 		or not tonumber(tc[1].options.bandwidth)
 		or not tc[1].handle
-		or not tonumber(tc[1].options.rtt)
 	then
 		qdisc.bandwidth = nil
 		qdisc.handle = nil
 		qdisc.kind = nil
-		qdisc.rtt = nil
 		return
 	end
 
 	qdisc.bandwidth = tc[1].options.bandwidth * 0.008
 	qdisc.handle = tc[1].handle
 	qdisc.kind = tc[1].kind
-	qdisc.rtt = tc[1].options.rtt * 0.001
 end
 
 local function updateQdisc(qdisc)
@@ -608,6 +628,58 @@ local function adjustmentLog()
 	end
 end
 
+local function iptablesRuleCleanup(table, chain, rule)
+	local escapedRule = string.gsub(rule, "([().%+-*?[^$])", "%%%1")
+	for line in string.gmatch(execute("iptables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
+		if string.find(line, escapedRule) then
+			os.execute("iptables -t " .. table .. " -D " .. chain .. " " .. rule)
+		end
+	end
+	for line in string.gmatch(execute("ip6tables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
+		if string.find(line, escapedRule) then
+			os.execute("ip6tables -t " .. table .. " -D " .. chain .. " " .. rule)
+		end
+	end
+end
+
+local function mssClamp(qdisc)
+	if not mssJitterFix or not qdisc.bandwidth then
+		return
+	end
+
+	local directionArg
+	if qdisc.device == device then
+		directionArg = "-i"
+		direction = "egress"
+	else
+		directionArg = "-o"
+		direction = "ingress"
+	end
+	local pmtuClampArgs =
+		'-p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "!fw3: Zone wan MTU fixing" -j TCPMSS --clamp-mss-to-pmtu'
+	local jitterClampArgs =
+		'-p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "Clamp MSS to reduce jitter" -j TCPMSS --set-mss 540'
+
+	if qdisc.bandwidth < 3000 and qdisc.mssClamp ~= true then
+		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
+		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
+		os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
+		os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
+		log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to 540")
+		qdisc.mssClamp = true
+	elseif qdisc.bandwidth >= 3000 and qdisc.mssClamp ~= false then
+		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
+		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
+		local wan = wanFirewallConfig()
+		if wan and toboolean(wan.mtu_fix) == true then
+			os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
+			os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
+			log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to PMTU")
+		end
+		qdisc.mssClamp = false
+	end
+end
+
 local function adjustSqm()
 	if not autorate or not egress.rate or not ingress.rate then
 		return
@@ -634,6 +706,8 @@ local function adjustSqm()
 	updateQdisc(egress)
 	updateQdisc(ingress)
 
+	mssClamp(egress)
+	mssClamp(ingress)
 	adjustmentLog()
 end
 
@@ -659,8 +733,6 @@ local function statisticsInterval()
 
 	if not ping.current and ingress.rate == 0 then
 		interfaceReconnect(interface)
-		writeStatus()
-		return
 	end
 
 	if not ping.current then
@@ -703,8 +775,6 @@ local function processPingOutput(line)
 		log("LOG_WARNING", line)
 		hostsCount = hostsCount - 1
 		pingStatus = 4
-	elseif string.find(line, "ping_send failed: No such device") then
-		pingStatus = 4
 	elseif
 		string.find(line, "^Hangup$")
 		or string.find(line, "^Killed$")
@@ -712,13 +782,10 @@ local function processPingOutput(line)
 		or string.find(line, " packets transmitted, .* received, .* packet loss, time .*ms")
 	then
 		pingStatus = 3
-	elseif string.find(line, "ping_send failed: ") then
+	elseif string.find(line, "ping_send failed: ") or string.find(line, "ping_sendto: Permission denied") then
 		pingStatus = 2
 	elseif string.find(line, "Invalid QoS argument:") then
 		log("LOG_ERR", "Invalid dscp config value specified for " .. interface)
-		exit()
-	elseif string.find(line, "ping_sendto: Permission denied") then
-		log("LOG_ERR", "Unable to ping remote hosts on " .. interface .. " (" .. device .. ")")
 		exit()
 	end
 end
@@ -766,6 +833,7 @@ local function pingLoop()
 end
 
 local function initialise()
+	console = readArg("c", "console")
 	interface = readArg("i", "interface")
 	if type(interface) ~= "string" or interface == "" then
 		log("LOG_ERR", "An interface must be specified for the -i (--interface) argument")
@@ -816,14 +884,16 @@ local function initialise()
 	if config.interval then
 		config.interval = tonumber(config.interval)
 		if not config.interval or config.interval <= 0 then
-			log("LOG_WARNING", "Invalid interval config value specified for " .. interface)
+			log("LOG_ERR", "Invalid interval config value specified for " .. interface)
+			os.exit()
 		else
 			interval = config.interval
 		end
 	end
 
 	if config.iptype and config.iptype ~= "ipv4" and config.iptype ~= "ipv6" and config.iptype ~= "ipv4v6" then
-		log("LOG_WARNING", "Invalid iptype config value specified for " .. interface)
+		log("LOG_ERR", "Invalid iptype config value specified for " .. interface)
+		os.exit()
 		config.iptype = nil
 	end
 
@@ -845,7 +915,8 @@ local function initialise()
 
 	if config.hosts then
 		if type(config.hosts ~= "table") then
-			log("LOG_WARNING", "Invalid hosts list specified for " .. interface)
+			log("LOG_ERR", "Invalid hosts list specified for " .. interface)
+			os.exit()
 		else
 			hosts = config.hosts
 		end
@@ -854,7 +925,8 @@ local function initialise()
 	if config.reconnect then
 		config.reconnect = toboolean(config.reconnect)
 		if config.reconnect == nil then
-			log("LOG_WARNING", "Invalid reconnect config value specified for " .. interface)
+			log("LOG_ERR", "Invalid reconnect config value specified for " .. interface)
+			os.exit()
 		else
 			reconnect = config.reconnect
 		end
@@ -863,7 +935,8 @@ local function initialise()
 	if config.autorate then
 		config.autorate = toboolean(config.autorate)
 		if config.autorate == nil then
-			log("LOG_WARNING", "Invalid autorate config value specified for " .. interface)
+			log("LOG_ERR", "Invalid autorate config value specified for " .. interface)
+			os.exit()
 		else
 			autorate = config.autorate
 		end
@@ -874,7 +947,8 @@ local function initialise()
 	elseif config.verbose then
 		config.verbose = toboolean(config.verbose)
 		if config.verbose == nil then
-			log("LOG_WARNING", "Invalid verbose config value specified for " .. interface)
+			log("LOG_ERR", "Invalid verbose config value specified for " .. interface)
+			os.exit()
 		else
 			verbose = config.verbose
 		end
@@ -885,14 +959,16 @@ local function initialise()
 		if type(logFileArg) == "string" and string.find(logFileArg, "^/[^%$]*$") then
 			logFile = logFileArg
 		else
-			log("LOG_WARNING", "Invalid log arguement path")
+			log("LOG_ERR", "Invalid log arguement path")
+			os.exit()
 		end
 	elseif config.logFile then
 		if not string.find(config.logFile, "^/[^%$]*$") then
 			config.logFile = nil
 		end
 		if config.logFile == nil then
-			log("LOG_WARNING", "Invalid logFile config value specified for " .. interface)
+			log("LOG_ERR", "Invalid logFile config value specified for " .. interface)
+			os.exit()
 		else
 			logFile = config.logFile
 		end
@@ -901,8 +977,6 @@ local function initialise()
 	if logFile then
 		os.remove(logFile)
 	end
-
-	console = readArg("c", "console")
 
 	if not autorate then
 		return
@@ -928,7 +1002,8 @@ local function initialise()
 	if config.shortPeakPersistence then
 		config.shortPeakPersistence = tonumber(config.shortPeakPersistence)
 		if not config.shortPeakPersistence or config.shortPeakPersistence <= 0 or config.shortPeakPersistence > 1 then
-			log("LOG_WARNING", "Invalid shortPeakPersistence config value specified for " .. interface)
+			log("LOG_ERR", "Invalid shortPeakPersistence config value specified for " .. interface)
+			os.exit()
 		else
 			shortPeakPersistence = config.shortPeakPersistence
 		end
@@ -937,7 +1012,8 @@ local function initialise()
 	if config.longPeakPersistence then
 		config.longPeakPersistence = tonumber(config.longPeakPersistence)
 		if not config.longPeakPersistence or config.longPeakPersistence <= 0 or config.longPeakPersistence > 1 then
-			log("LOG_WARNING", "Invalid longPeakPersistence config value specified for " .. interface)
+			log("LOG_ERR", "Invalid longPeakPersistence config value specified for " .. interface)
+			os.exit()
 		else
 			longPeakPersistence = config.longPeakPersistence
 		end
@@ -946,7 +1022,8 @@ local function initialise()
 	if config.pingPersistence then
 		config.pingPersistence = tonumber(config.pingPersistence)
 		if not config.pingPersistence or config.pingPersistence <= 0 or config.pingPersistence > 1 then
-			log("LOG_WARNING", "Invalid pingPersistence config value specified for " .. interface)
+			log("LOG_ERR", "Invalid pingPersistence config value specified for " .. interface)
+			os.exit()
 		else
 			pingPersistence = config.pingPersistence
 		end
@@ -955,7 +1032,8 @@ local function initialise()
 	if config.stablePersistence then
 		config.stablePersistence = tonumber(config.stablePersistence)
 		if not config.stablePersistence or config.stablePersistence <= 0 or config.stablePersistence > 1 then
-			log("LOG_WARNING", "Invalid stablePersistence config value specified for " .. interface)
+			log("LOG_ERR", "Invalid stablePersistence config value specified for " .. interface)
+			os.exit()
 		else
 			stablePersistence = config.stablePersistence
 		end
@@ -964,7 +1042,8 @@ local function initialise()
 	if config.stableSeconds then
 		config.stableSeconds = tonumber(config.stableSeconds)
 		if not config.stableSeconds or config.stableSeconds <= 0 then
-			log("LOG_WARNING", "Invalid stableSeconds config value specified for " .. interface)
+			log("LOG_ERR", "Invalid stableSeconds config value specified for " .. interface)
+			os.exit()
 		else
 			stableSeconds = config.stableSeconds
 		end
@@ -973,7 +1052,8 @@ local function initialise()
 	if config.egressTarget then
 		config.egressTarget = tonumber(config.egressTarget)
 		if not config.egressTarget or config.egressTarget <= 0 or config.egressTarget > 1 then
-			log("LOG_WARNING", "Invalid egressTarget config value specified for " .. interface)
+			log("LOG_ERR", "Invalid egressTarget config value specified for " .. interface)
+			os.exit()
 		else
 			egress.bandwidthTarget = config.egressTarget
 		end
@@ -982,7 +1062,8 @@ local function initialise()
 	if config.ingressTarget then
 		config.ingressTarget = tonumber(config.ingressTarget)
 		if not config.ingressTarget or config.ingressTarget <= 0 or config.ingressTarget > 1 then
-			log("LOG_WARNING", "Invalid ingressTarget config value specified for " .. interface)
+			log("LOG_ERR", "Invalid ingressTarget config value specified for " .. interface)
+			os.exit()
 		else
 			ingress.bandwidthTarget = config.ingressTarget
 		end
@@ -991,9 +1072,20 @@ local function initialise()
 	if config.rtt then
 		config.rtt = tonumber(config.rtt)
 		if not config.rtt or config.rtt <= 0 then
-			log("LOG_WARNING", "Invalid rtt config value specified for " .. interface)
+			log("LOG_ERR", "Invalid rtt config value specified for " .. interface)
+			os.exit()
 		else
 			rtt = config.rtt
+		end
+	end
+
+	if config.mssJitterFix then
+		config.mssJitterFix = toboolean(config.mssJitterFix)
+		if config.mssJitterFix == nil then
+			log("LOG_ERR", "Invalid mssJitterFix config value specified for " .. interface)
+			os.exit()
+		else
+			mssJitterFix = config.mssJitterFix
 		end
 	end
 
@@ -1020,6 +1112,7 @@ local function main()
 	signal.signal(signal.SIGHUP, exit)
 	signal.signal(signal.SIGINT, exit)
 	signal.signal(signal.SIGTERM, exit)
+	signal.signal(signal.SIGUSR1, resetMssClamp)
 
 	if console then
 		pid = unistd.getpid()
@@ -1038,7 +1131,7 @@ local function main()
 		if pingStatus == 4 then
 			interfaceReconnect(interface)
 		end
-		if pingStatus ~= 2 and pingStatus ~= 3 then
+		if pingStatus ~= 0 and pingStatus ~= 1 and pingStatus ~= 2 and pingStatus ~= 3 then
 			break
 		end
 		if pingStatus == 2 then
