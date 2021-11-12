@@ -4,10 +4,27 @@
 [ -n "$INTERFACE" ] || exit 0
 
 [ "$ACTION" = ifup ] && {
-    /etc/init.d/wanmonitor stop "${INTERFACE}"
-    /etc/init.d/wanmonitor enabled && /etc/init.d/wanmonitor start "${INTERFACE}"
+    /etc/init.d/wanmonitor stop "$INTERFACE"
+    if ! /etc/init.d/wanmonitor enabled || [ "$(uci -q get "wanmonitor.$INTERFACE.enabled")" != 1 ]; then
+        exit 0
+    fi
+
+    lua /usr/sbin/wanmonitor.lua -i "$INTERFACE" 2>>/tmp/wanmonitor.error
+
+    if /etc/init.d/sqm enabled >/dev/null 2>&1; then
+        local ingressDevice=$(uci -q get "wanmonitor.$INTERFACE.ingressDevice")
+        if [ -n "$ingressDevice" ] && [ "$ingressDevice" != "$DEVICE" ]; then
+            /usr/lib/sqm/run.sh stop "$ingressDevice" >/dev/null 2>&1
+            /usr/lib/sqm/run.sh start "$ingressDevice" >/dev/null 2>&1
+        fi
+    fi
 }
 
 [ "$ACTION" = ifdown ] && {
-    /etc/init.d/wanmonitor stop "${INTERFACE}"
+    /etc/init.d/wanmonitor stop "$INTERFACE"
+
+    local ingressDevice=$(uci -q get "wanmonitor.$INTERFACE.ingressDevice")
+    if [ -n "$ingressDevice" ] && [ "$ingressDevice" != "$DEVICE" ]; then
+        /usr/lib/sqm/run.sh stop "$ingressDevice" >/dev/null 2>&1
+    fi
 }
