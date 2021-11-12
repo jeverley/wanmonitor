@@ -41,9 +41,8 @@ local reconnect
 local autorate
 local rtt
 
-local hostsCount
-local pingResponseCount
-local pingResponseTimes
+local hostCount
+local responseCount
 local retries
 local retriesRemaining
 local previousRxBytes
@@ -261,16 +260,16 @@ local function updateRateStatistics(qdisc)
 		return
 	end
 
+	local assured = qdisc.rate
+	if ping.current > ping.target then
+		assured = assured * qdisc.bandwidthTarget
+	end
+
 	if not qdisc.assuredSample then
 		qdisc.assuredSample = {}
 	end
 	if not qdisc.rateSample then
 		qdisc.rateSample = {}
-	end
-
-	local assured = qdisc.rate
-	if ping.current > ping.target then
-		assured = assured * qdisc.bandwidthTarget
 	end
 
 	local assuredMean = movingMean(qdisc.assuredSample, assured, stablePeriod)
@@ -310,7 +309,6 @@ local function calculateDecreaseChance(qdisc)
 		qdisc.baselineComparision = nil
 		qdisc.decreaseChance = nil
 		qdisc.decreaseChanceReducer = nil
-		qdisc.oppositeChanceReducer = nil
 		return
 	end
 
@@ -320,26 +318,16 @@ local function calculateDecreaseChance(qdisc)
 		+ qdisc.longPeak * qdisc.bandwidthTarget * 0.05
 	qdisc.baselineComparision = (qdisc.rate - baseline) / baseline
 
-	if qdisc.utilisation > 1.01 then
-		qdisc.decreaseChanceReducer = 1
-		qdisc.oppositeChanceReducer = 0.5 / qdisc.utilisation
-	elseif qdisc.utilisation > 0.98 then
-		qdisc.decreaseChanceReducer = 0.3
-		qdisc.oppositeChanceReducer = 0.5
-	else
-		qdisc.decreaseChanceReducer = 1
-		qdisc.oppositeChanceReducer = nil
-	end
-
 	if ping.latent == interval or qdisc.cooldown == 0 then
-		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
+		qdisc.decreaseChanceReducer = 0.5
+	else
+		qdisc.decreaseChanceReducer = 1
 	end
 
-	if qdisc.baselineComparision <= 0 then
-		qdisc.decreaseChance = nil
+	if qdisc.baselineComparision > 0 then
+		qdisc.decreaseChance = qdisc.baselineComparision
 	else
-		local pingReducer = 1 - (ping.limit * 0.99 / ping.current) ^ 4
-		qdisc.decreaseChance = qdisc.baselineComparision * qdisc.decreaseChanceReducer * pingReducer
+		qdisc.decreaseChance = nil
 	end
 end
 
@@ -348,11 +336,48 @@ local function adjustDecreaseChances()
 		return
 	end
 
-	if egress.decreaseChance and ingress.oppositeChanceReducer then
-		egress.decreaseChance = egress.decreaseChance * ingress.oppositeChanceReducer
+	if egress.utilisation and ingress.utilisation then
+		if ingress.rate < ingress.mean * 1.05 then
+			if egress.utilisation > 1 then
+				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5 / egress.utilisation
+			elseif egress.utilisation > 0.98 then
+				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.3
+				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
+			elseif egress.utilisation > 0.9 then
+				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.7
+			elseif
+				ingress.rate > ingress.mean * 0.9
+				and egress.rate > egress.mean * 0.8
+				and egress.rate < egress.mean * 0.9
+			then
+				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
+			end
+		end
+
+		if egress.rate < egress.mean * 1.05 then
+			if ingress.utilisation > 1 then
+				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5 / ingress.utilisation
+			elseif ingress.utilisation > 0.98 then
+				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.3
+				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
+			elseif ingress.utilisation > 0.9 then
+				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.7
+			elseif
+				egress.rate > egress.mean * 0.9
+				and ingress.rate > ingress.mean * 0.8
+				and ingress.rate < ingress.mean * 0.9
+			then
+				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
+			end
+		end
 	end
-	if ingress.decreaseChance and egress.oppositeChanceReducer then
-		ingress.decreaseChance = ingress.decreaseChance * egress.oppositeChanceReducer
+
+	local pingReducer = 1 - ping.limit * 0.99 / ping.current
+	if egress.decreaseChance then
+		egress.decreaseChance = egress.baselineComparision * egress.decreaseChanceReducer * pingReducer
+	end
+	if ingress.decreaseChance then
+		ingress.decreaseChance = ingress.baselineComparision * ingress.decreaseChanceReducer * pingReducer
 	end
 
 	local amplification = 10
@@ -458,11 +483,7 @@ local function getQdisc(qdisc)
 
 	local tc = jsonc.parse(execute("tc -j qdisc show dev " .. qdisc.device))
 
-	if
-		tc[1].kind ~= "cake"
-		or not tonumber(tc[1].options.bandwidth)
-		or not tc[1].handle
-	then
+	if tc[1].kind ~= "cake" or not tonumber(tc[1].options.bandwidth) or not tc[1].handle then
 		qdisc.bandwidth = nil
 		qdisc.handle = nil
 		qdisc.kind = nil
@@ -731,13 +752,15 @@ local function statisticsInterval()
 	previousRxBytes = rxBytes
 	previousEpoch = intervalEpoch
 
-	if not ping.current and ingress.rate == 0 then
-		interfaceReconnect(interface)
-	end
-
-	if not ping.current then
+	if #ping.times > 0 then
+		ping.current = math.min(unpack(ping.times))
+	else
+		if ingress.rate == 0 then
+			interfaceReconnect(interface)
+		end
 		ping.current = interval * 1000
 	end
+
 	adjustSqm()
 	writeStatus()
 end
@@ -748,32 +771,30 @@ local function processPingOutput(line)
 	end
 
 	if string.find(line, " from .* icmp_seq=.*") then
-		pingResponseCount = pingResponseCount + 1
+		responseCount = responseCount + 1
 
-		local pingResponseTime = tonumber(string.match(line, "time=(%d+%.?%d*)"))
-		if pingResponseTime then
-			table.insert(pingResponseTimes, pingResponseTime)
+		local time = tonumber(string.match(line, "time=(%d+%.?%d*)"))
+		if time then
+			table.insert(ping.times, time)
 		end
 
-		if pingResponseCount < hostsCount then
+		if responseCount < hostCount then
 			return
 		end
 
-		if #pingResponseTimes > 0 then
+		if #ping.times > 0 then
 			pingStatus = 0
-			ping.current = math.min(unpack(pingResponseTimes))
 		else
 			pingStatus = 1
-			ping.current = nil
 		end
 
 		statisticsInterval()
-		pingResponseCount = 0
-		pingResponseTimes = {}
+		ping.times = {}
+		responseCount = 0
 		retriesRemaining = retries
 	elseif string.find(line, "Adding host .* failed: ") then
 		log("LOG_WARNING", line)
-		hostsCount = hostsCount - 1
+		hostCount = hostCount - 1
 		pingStatus = 4
 	elseif
 		string.find(line, "^Hangup$")
@@ -802,11 +823,11 @@ local function pingLoop()
 		iptypeArg = "-6 "
 	end
 
-	hostsCount = #hosts
+	hostCount = #hosts
 	intervalEpoch = nil
+	responseCount = 0
 	ping = {}
-	pingResponseCount = 0
-	pingResponseTimes = {}
+	ping.times = {}
 	pingStatus = nil
 	previousRxBytes = nil
 	previousTxBytes = nil
