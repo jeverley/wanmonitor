@@ -337,28 +337,39 @@ local function adjustDecreaseChances()
 	end
 
 	if egress.utilisation and ingress.utilisation then
+		if egress.utilisation < 1 and egress.utilisation > 0.98 then
+			egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.3
+		end
+		if ingress.utilisation < 1 and ingress.utilisation > 0.98 then
+			ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.3
+		end
 		if ingress.rate < ingress.mean * 1.05 then
 			if egress.utilisation > 1 then
 				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5 / egress.utilisation
 			elseif egress.utilisation > 0.98 then
-				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.3
 				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
 			elseif egress.utilisation > 0.9 then
 				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.7
-			elseif egress.rate > egress.mean * 0.8 and ingress.rate > ingress.mean * 0.9 then
+			elseif
+				ingress.rate > ingress.mean * 0.9
+				and egress.rate < egress.mean * 0.9
+				and egress.rate > egress.mean * 0.8
+			then
 				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
 			end
 		end
-
 		if egress.rate < egress.mean * 1.05 then
 			if ingress.utilisation > 1 then
 				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5 / ingress.utilisation
 			elseif ingress.utilisation > 0.98 then
-				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.3
 				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
 			elseif ingress.utilisation > 0.9 then
 				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.7
-			elseif ingress.rate > ingress.mean * 0.8 and egress.rate > egress.mean * 0.9 then
+			elseif
+				egress.rate > egress.mean * 0.9
+				and ingress.rate < ingress.mean * 0.9
+				and ingress.rate > ingress.mean * 0.8
+			then
 				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
 			end
 		end
