@@ -26,10 +26,9 @@ start() {
 	for i in $(interfaces $@); do
 		stop "$i"
 		[ "$(uci -q get "wanmonitor.$i.enabled")" = 1 ] || continue
-		lua /usr/sbin/wanmonitor.lua -i "$i" 2>>/tmp/wanmonitor.error
 
-		if /etc/init.d/sqm enabled >/dev/null 2>&1; then
-			local device=$(ubus call network.interface.$i status 2>/dev/null | jsonfilter -q -e '@.l3_device')
+		if [ "$(uci -q get "wanmonitor.$i.autorate")" = 1 ] && /etc/init.d/sqm enabled >/dev/null 2>&1; then
+			local device=$(ubus call "network.interface.$i" status 2>/dev/null | jsonfilter -q -e '@.l3_device')
 			if [ -n "$device" ]; then
 				/usr/lib/sqm/run.sh stop "$device" >/dev/null 2>&1
 				/usr/lib/sqm/run.sh start "$device" >/dev/null 2>&1
@@ -41,6 +40,7 @@ start() {
 				/usr/lib/sqm/run.sh start "$ingressDevice" >/dev/null 2>&1
 			fi
 		fi
+		lua /usr/sbin/wanmonitor.lua -i "$i" 2>>/tmp/wanmonitor.error
 	done
 }
 
