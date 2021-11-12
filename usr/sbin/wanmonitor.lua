@@ -345,11 +345,7 @@ local function adjustDecreaseChances()
 				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
 			elseif egress.utilisation > 0.9 then
 				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.7
-			elseif
-				ingress.rate > ingress.mean * 0.9
-				and egress.rate > egress.mean * 0.8
-				and egress.rate < egress.mean * 0.9
-			then
+			elseif egress.rate > egress.mean * 0.8 and ingress.rate > ingress.mean * 0.9 then
 				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
 			end
 		end
@@ -362,11 +358,7 @@ local function adjustDecreaseChances()
 				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
 			elseif ingress.utilisation > 0.9 then
 				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.7
-			elseif
-				egress.rate > egress.mean * 0.9
-				and ingress.rate > ingress.mean * 0.8
-				and ingress.rate < ingress.mean * 0.9
-			then
+			elseif ingress.rate > ingress.mean * 0.8 and egress.rate > egress.mean * 0.9 then
 				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
 			end
 		end
