@@ -259,12 +259,15 @@ local function updateRateStatistics(qdisc)
 		qdisc.assuredSample = {}
 	end
 	local assuredMean
-	if ping.current < ping.target then
+
+
+	if ping.current < ping.target or qdisc.assuredSample[1] and qdisc.rate < math.max(unpack(qdisc.assuredSample)) then
 		assuredMean = movingMean(qdisc.assuredSample, qdisc.rate, stablePeriod)
-	elseif #qdisc.assuredSample == 0 or assured >= math.min(unpack(qdisc.assuredSample)) then
+	elseif not qdisc.assuredSample[1] or assured >= math.min(unpack(qdisc.assuredSample)) then
 		assuredMean = movingMean(qdisc.assuredSample, assured, stablePeriod)
 	else
 		assuredMean = mean(qdisc.assuredSample)
+		table.remove(qdisc.assuredSample, 1)
 	end
 
 	if not qdisc.stable or ping.current < ping.target then
@@ -307,9 +310,9 @@ local function calculateBaselineDecreaseChance(qdisc)
 		return
 	end
 
-	local baseline = qdisc.stable * 0.45
+	local baseline = qdisc.stable * 0.5
 		+ qdisc.mean * 0.05
-		+ qdisc.shortPeak * qdisc.assuredTarget * 0.45
+		+ qdisc.shortPeak * qdisc.assuredTarget * 0.4
 		+ qdisc.longPeak * qdisc.assuredTarget * 0.05
 	qdisc.baselineComparision = (qdisc.rate - baseline) / baseline
 
@@ -319,22 +322,6 @@ local function calculateBaselineDecreaseChance(qdisc)
 	end
 
 	qdisc.decreaseChance = qdisc.baselineComparision
-end
-
-local function assuredRate(qdisc, period)
-	if not qdisc.assuredSample then
-		qdisc.assuredSample = {}
-	end
-	local assured = qdisc.rate * assuredTarget
-	if ping.current < ping.target then
-		table.insert(qdisc.assuredSample, qdisc.rate)
-	elseif assured >= math.min(unpack(qdisc.assuredSample)) then
-		table.insert(qdisc.assuredSample, assured)
-	end
-	if #qdisc.assuredSample == 0 then
-		return assured
-	end
-	return mean(qdisc.assuredSample)
 end
 
 local function calculateDecreaseChanceReducer(qdisc, compared)
@@ -375,7 +362,7 @@ local function adjustDecreaseChances()
 		ingress.decreaseChance = ingress.baselineComparision * ingress.decreaseChanceReducer * pingReducer
 	end
 
-	local amplify = 5
+	local amplify = 7
 	if egress.decreaseChance and not ingress.decreaseChance then
 		if egress.decreaseChance > 1 then
 			egress.decreaseChance = 1
