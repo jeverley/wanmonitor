@@ -280,23 +280,25 @@ local function updateRateStatistics(qdisc)
 		qdisc.maximum = assured
 	end
 
-	qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01)
-
 	if qdisc.bandwidth then
 		qdisc.target = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum)
 		qdisc.utilisation = qdisc.rate / qdisc.bandwidth
 	else
 		qdisc.target = nil
 		qdisc.utilisation = nil
-		return
+	end
+
+	if qdisc.utilisation and qdisc.utilisation > 0.9 then
+		qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01, assured)
+	else
+		qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01, qdisc.rate)
 	end
 end
 
-local function calculateDecreaseChance(qdisc)
+local function calculateBaselineDecreaseChance(qdisc)
 	if not qdisc.bandwidth or ping.current < ping.limit then
 		qdisc.baselineComparision = nil
 		qdisc.decreaseChance = nil
-		qdisc.decreaseChanceReducer = nil
 		return
 	end
 
@@ -306,50 +308,46 @@ local function calculateDecreaseChance(qdisc)
 		+ qdisc.longPeak * qdisc.assuredTarget * 0.05
 	qdisc.baselineComparision = (qdisc.rate - baseline) / baseline
 
-	if ping.latent == interval or qdisc.cooldown == 0 then
-		qdisc.decreaseChanceReducer = 0.5
-	else
-		qdisc.decreaseChanceReducer = 1
+	if qdisc.baselineComparision < 0 then
+		qdisc.decreaseChance = nil
+		return
 	end
 
-	if qdisc.utilisation < 1.005 and qdisc.utilisation > 0.98 then
+	qdisc.decreaseChance = qdisc.baselineComparision
+end
+
+local function calculateDecreaseChanceReducer(qdisc, compared)
+	if not qdisc.decreaseChance then
+		qdisc.decreaseChanceReducer = nil
+		return
+	end
+	qdisc.decreaseChanceReducer = 1
+
+	if ping.latent == interval or qdisc.cooldown == 0 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
 
-	if qdisc.baselineComparision > 0 then
-		qdisc.decreaseChance = qdisc.baselineComparision
-	else
-		qdisc.decreaseChance = nil
+	if qdisc.utilisation > 0.98 and qdisc.utilisation < 1.005 then
+		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
+	end
+
+	if compared.utilisation and compared.utilisation > 1 then
+		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.7 / compared.utilisation
+	end
+
+	if
+		qdisc.rate < qdisc.mean * 1.05
+		and qdisc.rate > qdisc.mean * 0.9
+		and compared.rate < compared.mean * 0.9
+		and compared.rate > compared.mean * 0.8
+	then
+		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
 end
 
 local function adjustDecreaseChances()
 	if not egress.decreaseChance and not ingress.decreaseChance then
 		return
-	end
-
-	if egress.utilisation and egress.utilisation > 0.98 then
-		ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.7 / egress.utilisation
-	end
-	if ingress.utilisation and ingress.utilisation > 0.98 then
-		egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.7 / ingress.utilisation
-	end
-
-	if
-		egress.rate < egress.mean * 1.05
-		and egress.rate > egress.mean * 0.9
-		and ingress.rate < ingress.mean * 0.9
-		and ingress.rate > ingress.mean * 0.8
-	then
-		egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
-	end
-	if
-		ingress.rate < ingress.mean * 1.05
-		and ingress.rate > ingress.mean * 0.9
-		and egress.rate < egress.mean * 0.9
-		and egress.rate > egress.mean * 0.8
-	then
-		ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
 	end
 
 	local pingReducer = 1 - ping.limit * 0.99 / ping.current
@@ -408,10 +406,7 @@ local function updateCooldown(qdisc)
 end
 
 local function calculateDecrease(qdisc)
-	qdisc.change = (qdisc.bandwidth - qdisc.rate * qdisc.assuredTarget) * qdisc.decreaseChance * -1
-	if qdisc.bandwidth + qdisc.change < qdisc.minimum then
-		qdisc.change = qdisc.minimum - qdisc.bandwidth
-	end
+	qdisc.change = (qdisc.bandwidth - qdisc.minimum) * qdisc.decreaseChance * -1
 
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
@@ -694,8 +689,10 @@ local function adjustSqm()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
-	calculateDecreaseChance(egress)
-	calculateDecreaseChance(ingress)
+	calculateBaselineDecreaseChance(egress)
+	calculateBaselineDecreaseChance(ingress)
+	calculateDecreaseChanceReducer(egress, ingress)
+	calculateDecreaseChanceReducer(ingress, egress)
 	adjustDecreaseChances()
 
 	updateCooldown(egress)
