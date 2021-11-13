@@ -288,10 +288,10 @@ local function updateRateStatistics(qdisc)
 		qdisc.utilisation = nil
 	end
 
-	if qdisc.utilisation and qdisc.utilisation > 0.9 then
+	if qdisc.utilisation and qdisc.utilisation > 0.98 then
 		qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01, assured)
 	else
-		qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01, qdisc.rate)
+		qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01, qdisc.rate * 0.98)
 	end
 end
 
@@ -323,10 +323,6 @@ local function calculateDecreaseChanceReducer(qdisc, compared)
 	end
 	qdisc.decreaseChanceReducer = 1
 
-	if ping.latent == interval or qdisc.cooldown == 0 then
-		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
-	end
-
 	if qdisc.utilisation > 0.98 and qdisc.utilisation < 1.005 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
@@ -336,10 +332,10 @@ local function calculateDecreaseChanceReducer(qdisc, compared)
 	end
 
 	if
-		qdisc.rate < qdisc.mean * 1.05
-		and qdisc.rate > qdisc.mean * 0.9
-		and compared.rate < compared.mean * 0.9
+		qdisc.rate > qdisc.mean * 0.9
+		and qdisc.rate < qdisc.mean * 1.05
 		and compared.rate > compared.mean * 0.8
+		and compared.rate < compared.mean * 0.9
 	then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
@@ -432,7 +428,7 @@ local function calculateChange(qdisc)
 		return
 	end
 
-	if qdisc.decreaseChance and qdisc.rate > qdisc.minimum then
+	if qdisc.decreaseChance and qdisc.bandwidth > qdisc.minimum then
 		calculateDecrease(qdisc)
 		return
 	end
@@ -599,9 +595,19 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.rate)
 		.. ";	"
-		.. string.format("%.2f", ingressBaselineComparision)
+		.. string.format("%.2f", ingress.minimum)
 		.. ";	"
-		.. string.format("%.2f", ingressDecreaseChance)
+		.. string.format("%.2f", egress.minimum)
+		.. ";	"
+		.. string.format(
+			"%.2f",
+			ingressBaselineComparision
+		)
+		.. ";	"
+		.. string.format(
+			"%.2f",
+			ingressDecreaseChance
+		)
 		.. ";	"
 		.. string.format(
 			"%.2f",
