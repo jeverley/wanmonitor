@@ -262,7 +262,7 @@ local function updateRateStatistics(qdisc)
 
 	local assured = qdisc.rate
 	if ping.current > ping.target then
-		assured = assured * qdisc.bandwidthTarget
+		assured = assured * qdisc.assuredTarget
 	end
 
 	if not qdisc.assuredSample then
@@ -300,7 +300,7 @@ local function updateRateStatistics(qdisc)
 	end
 
 	qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01)
-	qdisc.target = math.max(qdisc.bandwidth * qdisc.bandwidthTarget, qdisc.maximum)
+	qdisc.target = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum)
 	qdisc.utilisation = qdisc.rate / qdisc.bandwidth
 end
 
@@ -312,10 +312,10 @@ local function calculateDecreaseChance(qdisc)
 		return
 	end
 
-	local baseline = qdisc.stable * 0.4
-		+ qdisc.mean * 0.1
-		+ qdisc.shortPeak * qdisc.bandwidthTarget * 0.45
-		+ qdisc.longPeak * qdisc.bandwidthTarget * 0.05
+	local baseline = qdisc.stable * 0.45
+		+ qdisc.mean * 0.05
+		+ qdisc.shortPeak * qdisc.assuredTarget * 0.45
+		+ qdisc.longPeak * qdisc.assuredTarget * 0.05
 	qdisc.baselineComparision = (qdisc.rate - baseline) / baseline
 
 	if ping.latent == interval or qdisc.cooldown == 0 then
@@ -346,7 +346,8 @@ local function adjustDecreaseChances()
 		elseif egress.utilisation > 0.98 then
 			ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
 		elseif
-			ingress.rate > ingress.mean * 0.9
+			ingress.rate < ingress.mean * 1.05
+			and ingress.rate > ingress.mean * 0.9
 			and egress.rate < egress.mean * 0.9
 			and egress.rate > egress.mean * 0.8
 		then
@@ -357,7 +358,8 @@ local function adjustDecreaseChances()
 		elseif ingress.utilisation > 0.98 then
 			egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
 		elseif
-			egress.rate > egress.mean * 0.9
+			egress.rate < egress.mean * 1.05
+			and egress.rate > egress.mean * 0.9
 			and ingress.rate < ingress.mean * 0.9
 			and ingress.rate > ingress.mean * 0.8
 		then
@@ -373,7 +375,7 @@ local function adjustDecreaseChances()
 		ingress.decreaseChance = ingress.baselineComparision * ingress.decreaseChanceReducer * pingReducer
 	end
 
-	local amplification = 10
+	local amplify = 10
 	if egress.decreaseChance and not ingress.decreaseChance then
 		if egress.decreaseChance > 1 then
 			egress.decreaseChance = 1
@@ -387,14 +389,13 @@ local function adjustDecreaseChances()
 			ingress.decreaseChance = ingress.decreaseChance / egress.decreaseChance
 			egress.decreaseChance = 1
 		end
-		ingress.decreaseChance = ingress.decreaseChance
-			* (ingress.decreaseChance / egress.decreaseChance) ^ amplification
+		ingress.decreaseChance = ingress.decreaseChance * (ingress.decreaseChance / egress.decreaseChance) ^ amplify
 	elseif ingress.decreaseChance > egress.decreaseChance then
 		if ingress.decreaseChance > 1 then
 			egress.decreaseChance = egress.decreaseChance / ingress.decreaseChance
 			ingress.decreaseChance = 1
 		end
-		egress.decreaseChance = egress.decreaseChance * (egress.decreaseChance / ingress.decreaseChance) ^ amplification
+		egress.decreaseChance = egress.decreaseChance * (egress.decreaseChance / ingress.decreaseChance) ^ amplify
 	elseif egress.decreaseChance > 1 then
 		egress.decreaseChance = 1
 		ingress.decreaseChance = 1
@@ -990,10 +991,6 @@ local function initialise()
 		end
 	end
 
-	if logFile then
-		os.remove(logFile)
-	end
-
 	if not autorate then
 		return
 	end
@@ -1005,8 +1002,8 @@ local function initialise()
 	pingPersistence = 0.99
 	stablePersistence = 0.9
 	stableSeconds = 2
-	egress.bandwidthTarget = 0.7
-	ingress.bandwidthTarget = 0.7
+	egress.assuredTarget = 0.7
+	ingress.assuredTarget = 0.7
 	egress.device = device
 
 	if not config.ingressDevice or device == config.ingressDevice then
@@ -1065,23 +1062,23 @@ local function initialise()
 		end
 	end
 
-	if config.egressTarget then
-		config.egressTarget = tonumber(config.egressTarget)
-		if not config.egressTarget or config.egressTarget <= 0 or config.egressTarget > 1 then
-			log("LOG_ERR", "Invalid egressTarget config value specified for " .. interface)
+	if config.egressAssuredTarget then
+		config.egressAssuredTarget = tonumber(config.egressAssuredTarget)
+		if not config.egressAssuredTarget or config.egressAssuredTarget <= 0 or config.egressAssuredTarget > 1 then
+			log("LOG_ERR", "Invalid egressAssuredTarget config value specified for " .. interface)
 			os.exit()
 		else
-			egress.bandwidthTarget = config.egressTarget
+			egress.assuredTarget = config.egressAssuredTarget
 		end
 	end
 
-	if config.ingressTarget then
-		config.ingressTarget = tonumber(config.ingressTarget)
-		if not config.ingressTarget or config.ingressTarget <= 0 or config.ingressTarget > 1 then
-			log("LOG_ERR", "Invalid ingressTarget config value specified for " .. interface)
+	if config.ingressAssuredTarget then
+		config.ingressAssuredTarget = tonumber(config.ingressAssuredTarget)
+		if not config.ingressAssuredTarget or config.ingressAssuredTarget <= 0 or config.ingressAssuredTarget > 1 then
+			log("LOG_ERR", "Invalid ingressAssuredTarget config value specified for " .. interface)
 			os.exit()
 		else
-			ingress.bandwidthTarget = config.ingressTarget
+			ingress.assuredTarget = config.ingressAssuredTarget
 		end
 	end
 
