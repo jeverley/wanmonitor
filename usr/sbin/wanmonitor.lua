@@ -249,11 +249,18 @@ local function updateRateStatistics(qdisc)
 	if not qdisc.assuredSample then
 		qdisc.assuredSample = {}
 	end
+	local assuredMean
+	if ping.current < ping.target then
+		assuredMean = movingMean(qdisc.assuredSample, qdisc.rate, stablePeriod)
+	elseif #qdisc.assuredSample == 0 or qdisc.rate * qdisc.assuredTarget >= math.min(unpack(qdisc.assuredSample)) then
+		assuredMean = movingMean(qdisc.assuredSample, qdisc.rate * qdisc.assuredTarget, stablePeriod)
+	else
+		assuredMean = mean(qdisc.assuredSample)
+	end
+
 	if not qdisc.rateSample then
 		qdisc.rateSample = {}
 	end
-
-	local assuredMean = movingMean(qdisc.assuredSample, assured, stablePeriod)
 	qdisc.mean = movingMean(qdisc.rateSample, qdisc.rate, stablePeriod)
 
 	if not qdisc.stable or ping.current < ping.target then
@@ -288,10 +295,10 @@ local function updateRateStatistics(qdisc)
 		qdisc.utilisation = nil
 	end
 
-	if qdisc.utilisation and qdisc.utilisation > 0.98 then
-		qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01, assured)
-	else
+	if qdisc.utilisation and qdisc.utilisation < 0.98 then
 		qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01, qdisc.rate * 0.98)
+	else
+		qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01, assuredMean)
 	end
 end
 
@@ -314,6 +321,22 @@ local function calculateBaselineDecreaseChance(qdisc)
 	end
 
 	qdisc.decreaseChance = qdisc.baselineComparision
+end
+
+local function assuredRate(qdisc, period)
+	if not qdisc.assuredSample then
+		qdisc.assuredSample = {}
+	end
+	local assured = qdisc.rate * assuredTarget
+	if ping.current < ping.target then
+		table.insert(qdisc.assuredSample, qdisc.rate)
+	elseif assured >= math.min(unpack(qdisc.assuredSample)) then
+		table.insert(qdisc.assuredSample, assured)
+	end
+	if #qdisc.assuredSample == 0 then
+		return assured
+	end
+	return mean(qdisc.assuredSample)
 end
 
 local function calculateDecreaseChanceReducer(qdisc, compared)
