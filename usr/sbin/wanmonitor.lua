@@ -324,6 +324,10 @@ local function calculateDecreaseChance(qdisc)
 		qdisc.decreaseChanceReducer = 1
 	end
 
+	if qdisc.utilisation < 1 and qdisc.utilisation > 0.98 then
+		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
+	end
+
 	if qdisc.baselineComparision > 0 then
 		qdisc.decreaseChance = qdisc.baselineComparision
 	else
@@ -337,41 +341,27 @@ local function adjustDecreaseChances()
 	end
 
 	if egress.utilisation and ingress.utilisation then
-		if egress.utilisation < 1 and egress.utilisation > 0.98 then
-			egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.3
+		if egress.utilisation > 1 then
+			ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5 / egress.utilisation
+		elseif egress.utilisation > 0.98 then
+			ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
+		elseif
+			ingress.rate > ingress.mean * 0.9
+			and egress.rate < egress.mean * 0.9
+			and egress.rate > egress.mean * 0.8
+		then
+			ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
 		end
-		if ingress.utilisation < 1 and ingress.utilisation > 0.98 then
-			ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.3
-		end
-		if ingress.rate < ingress.mean * 1.05 then
-			if egress.utilisation > 1 then
-				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5 / egress.utilisation
-			elseif egress.utilisation > 0.98 then
-				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
-			elseif egress.utilisation > 0.9 then
-				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.7
-			elseif
-				ingress.rate > ingress.mean * 0.9
-				and egress.rate < egress.mean * 0.9
-				and egress.rate > egress.mean * 0.8
-			then
-				ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
-			end
-		end
-		if egress.rate < egress.mean * 1.05 then
-			if ingress.utilisation > 1 then
-				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5 / ingress.utilisation
-			elseif ingress.utilisation > 0.98 then
-				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
-			elseif ingress.utilisation > 0.9 then
-				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.7
-			elseif
-				egress.rate > egress.mean * 0.9
-				and ingress.rate < ingress.mean * 0.9
-				and ingress.rate > ingress.mean * 0.8
-			then
-				egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
-			end
+		if ingress.utilisation > 1 then
+			egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5 / ingress.utilisation
+		elseif ingress.utilisation > 0.98 then
+			egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
+		elseif
+			egress.rate > egress.mean * 0.9
+			and ingress.rate < ingress.mean * 0.9
+			and ingress.rate > ingress.mean * 0.8
+		then
+			egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
 		end
 	end
 
@@ -671,13 +661,14 @@ local function mssClamp(qdisc)
 		return
 	end
 
+	local direction
 	local directionArg
 	if qdisc.device == device then
-		directionArg = "-i"
 		direction = "egress"
+		directionArg = "-i"
 	else
-		directionArg = "-o"
 		direction = "ingress"
+		directionArg = "-o"
 	end
 	local pmtuClampArgs =
 		'-p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "!fw3: Zone wan MTU fixing" -j TCPMSS --clamp-mss-to-pmtu'
@@ -732,6 +723,7 @@ local function adjustSqm()
 
 	mssClamp(egress)
 	mssClamp(ingress)
+
 	adjustmentLog()
 end
 
