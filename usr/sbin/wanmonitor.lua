@@ -1062,23 +1062,23 @@ local function initialise()
 		end
 	end
 
-	if config.egressAssuredTarget then
-		config.egressAssuredTarget = tonumber(config.egressAssuredTarget)
-		if not config.egressAssuredTarget or config.egressAssuredTarget <= 0 or config.egressAssuredTarget > 1 then
-			log("LOG_ERR", "Invalid egressAssuredTarget config value specified for " .. interface)
+	if config.egressAssured then
+		config.egressAssured = tonumber(config.egressAssured)
+		if not config.egressAssured or config.egressAssured <= 0 or config.egressAssured > 1 then
+			log("LOG_ERR", "Invalid egressAssured config value specified for " .. interface)
 			os.exit()
 		else
-			egress.assuredTarget = config.egressAssuredTarget
+			egress.assuredTarget = config.egressAssured
 		end
 	end
 
-	if config.ingressAssuredTarget then
-		config.ingressAssuredTarget = tonumber(config.ingressAssuredTarget)
-		if not config.ingressAssuredTarget or config.ingressAssuredTarget <= 0 or config.ingressAssuredTarget > 1 then
-			log("LOG_ERR", "Invalid ingressAssuredTarget config value specified for " .. interface)
+	if config.ingressAssured then
+		config.ingressAssured = tonumber(config.ingressAssured)
+		if not config.ingressAssured or config.ingressAssured <= 0 or config.ingressAssured > 1 then
+			log("LOG_ERR", "Invalid ingressAssured config value specified for " .. interface)
 			os.exit()
 		else
-			ingress.assuredTarget = config.ingressAssuredTarget
+			ingress.assuredTarget = config.ingressAssured
 		end
 	end
 
