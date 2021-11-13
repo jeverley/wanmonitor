@@ -202,11 +202,6 @@ local function interfaceReconnect(interface)
 		return
 	end
 
-	local status = interfaceStatus(interface)
-	if not status.up or status.pending then
-		return
-	end
-
 	log("LOG_WARNING", "Requesting ifup for " .. interface)
 	cleanup()
 	os.execute("ifup " .. interface)
@@ -246,20 +241,6 @@ local function updatePingStatistics()
 end
 
 local function updateRateStatistics(qdisc)
-	if not qdisc.kind then
-		qdisc.assuredSample = nil
-		qdisc.rateSample = nil
-		qdisc.longPeak = nil
-		qdisc.shortPeak = nil
-		qdisc.mean = nil
-		qdisc.maximum = nil
-		qdisc.minimum = nil
-		qdisc.stable = nil
-		qdisc.target = nil
-		qdisc.utilisation = nil
-		return
-	end
-
 	local assured = qdisc.rate
 	if ping.current > ping.target then
 		assured = assured * qdisc.assuredTarget
@@ -300,12 +281,19 @@ local function updateRateStatistics(qdisc)
 	end
 
 	qdisc.minimum = math.max(qdisc.stable, qdisc.maximum * 0.01)
-	qdisc.target = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum)
-	qdisc.utilisation = qdisc.rate / qdisc.bandwidth
+
+	if qdisc.bandwidth then
+		qdisc.target = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum)
+		qdisc.utilisation = qdisc.rate / qdisc.bandwidth
+	else
+		qdisc.target = nil
+		qdisc.utilisation = nil
+		return
+	end
 end
 
 local function calculateDecreaseChance(qdisc)
-	if not qdisc.kind or ping.current < ping.limit then
+	if not qdisc.bandwidth or ping.current < ping.limit then
 		qdisc.baselineComparision = nil
 		qdisc.decreaseChance = nil
 		qdisc.decreaseChanceReducer = nil
@@ -324,7 +312,7 @@ local function calculateDecreaseChance(qdisc)
 		qdisc.decreaseChanceReducer = 1
 	end
 
-	if qdisc.utilisation < 1 and qdisc.utilisation > 0.98 then
+	if qdisc.utilisation < 1.005 and qdisc.utilisation > 0.98 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
 
@@ -340,31 +328,28 @@ local function adjustDecreaseChances()
 		return
 	end
 
-	if egress.utilisation and ingress.utilisation then
-		if egress.utilisation > 1 then
-			ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5 / egress.utilisation
-		elseif egress.utilisation > 0.98 then
-			ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
-		elseif
-			ingress.rate < ingress.mean * 1.05
-			and ingress.rate > ingress.mean * 0.9
-			and egress.rate < egress.mean * 0.9
-			and egress.rate > egress.mean * 0.8
-		then
-			ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
-		end
-		if ingress.utilisation > 1 then
-			egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5 / ingress.utilisation
-		elseif ingress.utilisation > 0.98 then
-			egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
-		elseif
-			egress.rate < egress.mean * 1.05
-			and egress.rate > egress.mean * 0.9
-			and ingress.rate < ingress.mean * 0.9
-			and ingress.rate > ingress.mean * 0.8
-		then
-			egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
-		end
+	if egress.utilisation and egress.utilisation > 0.98 then
+		ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.7 / egress.utilisation
+	end
+	if ingress.utilisation and ingress.utilisation > 0.98 then
+		egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.7 / ingress.utilisation
+	end
+
+	if
+		egress.rate < egress.mean * 1.05
+		and egress.rate > egress.mean * 0.9
+		and ingress.rate < ingress.mean * 0.9
+		and ingress.rate > ingress.mean * 0.8
+	then
+		egress.decreaseChanceReducer = egress.decreaseChanceReducer * 0.5
+	end
+	if
+		ingress.rate < ingress.mean * 1.05
+		and ingress.rate > ingress.mean * 0.9
+		and egress.rate < egress.mean * 0.9
+		and egress.rate > egress.mean * 0.8
+	then
+		ingress.decreaseChanceReducer = ingress.decreaseChanceReducer * 0.5
 	end
 
 	local pingReducer = 1 - ping.limit * 0.99 / ping.current
@@ -403,7 +388,7 @@ local function adjustDecreaseChances()
 end
 
 local function updateCooldown(qdisc)
-	if not qdisc.kind then
+	if not qdisc.bandwidth then
 		qdisc.cooldown = nil
 		return
 	end
@@ -447,7 +432,7 @@ local function calculateIncrease(qdisc)
 end
 
 local function calculateChange(qdisc)
-	if not qdisc.kind then
+	if not qdisc.bandwidth then
 		qdisc.change = nil
 		return
 	end
@@ -1127,14 +1112,11 @@ local function main()
 	signal.signal(signal.SIGTERM, exit)
 	signal.signal(signal.SIGUSR1, resetMssClamp)
 
-	if console then
-		pid = unistd.getpid()
-		pidFile = nil
-	else
+	if not console then
 		daemonise()
-		pid = unistd.getpid()
-		writeFile(pidFile, pid)
 	end
+	pid = unistd.getpid()
+	writeFile(pidFile, pid)
 
 	log("LOG_NOTICE", "Started for " .. interface .. " (" .. device .. ")")
 
