@@ -423,7 +423,7 @@ local function updateCooldown(qdisc)
 end
 
 local function calculateDecrease(qdisc)
-	qdisc.change = (qdisc.bandwidth - qdisc.rate * 0.5) * qdisc.decreaseChance * -1
+	qdisc.change = (qdisc.bandwidth - qdisc.rate * qdisc.assuredTarget) * qdisc.decreaseChance * -1
 	if qdisc.bandwidth + qdisc.change < qdisc.minimum then
 		qdisc.change = qdisc.minimum - qdisc.bandwidth
 	end
