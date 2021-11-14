@@ -9,14 +9,16 @@
         exit 0
     fi
 
+    logger -t wanmonitor "Starting wanmonitor due to $ACTION of $INTERFACE ($DEVICE)"
+
     if /etc/init.d/sqm enabled >/dev/null 2>&1; then
-        local ingressDevice=$(uci -q get "wanmonitor.$INTERFACE.ingressDevice")
+        ingressDevice=$(uci -q get "wanmonitor.$INTERFACE.ingressDevice")
         if [ -n "$ingressDevice" ] && [ "$ingressDevice" != "$DEVICE" ]; then
             /usr/lib/sqm/run.sh stop "$ingressDevice" >/dev/null 2>&1
             /usr/lib/sqm/run.sh start "$ingressDevice" >/dev/null 2>&1
         fi
     fi
-    
+
     lua /usr/sbin/wanmonitor.lua -i "$INTERFACE" 2>>/tmp/wanmonitor.error
 }
 
