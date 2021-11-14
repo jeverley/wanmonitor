@@ -81,6 +81,7 @@ local function resetMssClamp()
 	ingress.mssClamp = nil
 	if childPid then
 		signal.kill(childPid, signal.SIGKILL)
+		pingStatus = 3
 	end
 end
 
@@ -244,10 +245,10 @@ local function updatePingStatistics()
 end
 
 local function updateRateStatistics(qdisc)
-	if not qdisc.rateSample then
-		qdisc.rateSample = {}
+	if not qdisc.meanSample then
+		qdisc.meanSample = {}
 	end
-	qdisc.mean = movingMean(qdisc.rateSample, qdisc.rate, stablePeriod)
+	qdisc.mean = movingMean(qdisc.meanSample, qdisc.rate, stablePeriod)
 
 	local assured = qdisc.rate
 	if ping.current > ping.target then
