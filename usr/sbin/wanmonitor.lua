@@ -79,6 +79,9 @@ end
 local function resetMssClamp()
 	egress.mssClamp = nil
 	ingress.mssClamp = nil
+	if childPid then
+		signal.kill(childPid, signal.SIGKILL)
+	end
 end
 
 local function epoch()
@@ -251,23 +254,14 @@ local function updateRateStatistics(qdisc)
 		assured = assured * qdisc.assuredTarget
 	end
 
-	if not qdisc.maximum or assured > qdisc.maximum then
-		qdisc.maximum = assured
-	end
-
 	if not qdisc.assuredSample then
 		qdisc.assuredSample = {}
 	end
 	local assuredMean
-
-
 	if ping.current < ping.target or qdisc.assuredSample[1] and qdisc.rate < math.max(unpack(qdisc.assuredSample)) then
 		assuredMean = movingMean(qdisc.assuredSample, qdisc.rate, stablePeriod)
-	elseif not qdisc.assuredSample[1] or assured >= math.min(unpack(qdisc.assuredSample)) then
-		assuredMean = movingMean(qdisc.assuredSample, assured, stablePeriod)
 	else
-		assuredMean = mean(qdisc.assuredSample)
-		table.remove(qdisc.assuredSample, 1)
+		assuredMean = movingMean(qdisc.assuredSample, assured, stablePeriod)
 	end
 
 	if not qdisc.stable or ping.current < ping.target then
@@ -288,6 +282,10 @@ local function updateRateStatistics(qdisc)
 		qdisc.longPeak = qdisc.longPeak * longPeakPersistence + qdisc.rate * (1 - longPeakPersistence)
 	end
 
+	if not qdisc.maximum or assured > qdisc.maximum then
+		qdisc.maximum = assured
+	end
+
 	if qdisc.bandwidth then
 		qdisc.target = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum)
 		qdisc.utilisation = qdisc.rate / qdisc.bandwidth
@@ -303,10 +301,11 @@ local function updateRateStatistics(qdisc)
 	end
 end
 
-local function calculateBaselineDecreaseChance(qdisc)
+local function calculateDecreaseChance(qdisc, compared)
 	if not qdisc.bandwidth or ping.current < ping.limit then
 		qdisc.baselineComparision = nil
 		qdisc.decreaseChance = nil
+		qdisc.decreaseChanceReducer = nil
 		return
 	end
 
@@ -318,17 +317,10 @@ local function calculateBaselineDecreaseChance(qdisc)
 
 	if qdisc.baselineComparision < 0 then
 		qdisc.decreaseChance = nil
-		return
-	end
-
-	qdisc.decreaseChance = qdisc.baselineComparision
-end
-
-local function calculateDecreaseChanceReducer(qdisc, compared)
-	if not qdisc.decreaseChance then
 		qdisc.decreaseChanceReducer = nil
 		return
 	end
+
 	qdisc.decreaseChanceReducer = 1
 
 	if qdisc.utilisation > 0.98 and qdisc.utilisation < 1.005 then
@@ -347,19 +339,14 @@ local function calculateDecreaseChanceReducer(qdisc, compared)
 	then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
+
+	local pingReducer = 1 - ping.limit * 0.99 / ping.current
+	qdisc.decreaseChance = qdisc.baselineComparision * qdisc.decreaseChanceReducer * pingReducer
 end
 
 local function adjustDecreaseChances()
 	if not egress.decreaseChance and not ingress.decreaseChance then
 		return
-	end
-
-	local pingReducer = 1 - ping.limit * 0.99 / ping.current
-	if egress.decreaseChance then
-		egress.decreaseChance = egress.baselineComparision * egress.decreaseChanceReducer * pingReducer
-	end
-	if ingress.decreaseChance then
-		ingress.decreaseChance = ingress.baselineComparision * ingress.decreaseChanceReducer * pingReducer
 	end
 
 	local amplify = 7
@@ -703,10 +690,8 @@ local function adjustSqm()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
-	calculateBaselineDecreaseChance(egress)
-	calculateBaselineDecreaseChance(ingress)
-	calculateDecreaseChanceReducer(egress, ingress)
-	calculateDecreaseChanceReducer(ingress, egress)
+	calculateDecreaseChance(egress, ingress)
+	calculateDecreaseChance(ingress, egress)
 	adjustDecreaseChances()
 
 	updateCooldown(egress)
@@ -747,10 +732,10 @@ local function statisticsInterval()
 	if #ping.times > 0 then
 		ping.current = math.min(unpack(ping.times))
 	else
+		ping.current = interval * 1000
 		if ingress.rate == 0 then
 			interfaceReconnect(interface)
 		end
-		ping.current = interval * 1000
 	end
 
 	adjustSqm()
@@ -1130,7 +1115,7 @@ local function main()
 	writeFile(pidFile, pid)
 
 	log("LOG_NOTICE", "Started for " .. interface .. " (" .. device .. ")")
-
+	
 	retriesRemaining = retries
 	while retriesRemaining > 0 do
 		pingLoop()
