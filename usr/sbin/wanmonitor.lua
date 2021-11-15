@@ -212,7 +212,6 @@ end
 local function updatePingStatistics()
 	if not ping.baseline then
 		ping.clear = 0
-		ping.latent = 0
 		ping.baseline = rtt
 	end
 
@@ -225,20 +224,12 @@ local function updatePingStatistics()
 	ping.limit = ping.baseline * 1.9
 	ping.target = ping.baseline * 1.4
 
-	if ping.current > ping.limit then
-		ping.clear = 0
-		ping.latent = ping.latent + interval
-		return
-	end
-
 	if ping.current > ping.target then
 		ping.clear = 0
-		ping.latent = 0
 		return
 	end
 
 	ping.clear = ping.clear + interval
-	ping.latent = 0
 end
 
 local function updateRateStatistics(qdisc)
@@ -495,18 +486,17 @@ local function adjustmentLog()
 	if
 		not (ingress.change and ingress.change ~= 0)
 		and not (egress.change and egress.change ~= 0)
-		and not (ping.current and ping.limit and ping.current > ping.limit)
+		and not (ping.current and ping.target and ping.current > ping.target)
 		and not verbose
 	then
 		return
 	end
 
-	local ingressUtilisation = 0
+	local ingressUtilisation = ingress.utilisation
 	local ingressBandwidth = 0
 	local ingressBaselineComparision = 0
 	local ingressDecreaseChance = 0
 	if ingress.bandwidth then
-		ingressUtilisation = ingress.utilisation
 		ingressBandwidth = ingress.bandwidth
 	end
 	if ingress.baselineComparision then
@@ -516,12 +506,11 @@ local function adjustmentLog()
 		ingressDecreaseChance = ingress.decreaseChance
 	end
 
-	local egressUtilisation = 0
+	local egressUtilisation = egress.utilisation
 	local egressBandwidth = 0
 	local egressBaselineComparision = 0
 	local egressDecreaseChance = 0
 	if egress.bandwidth then
-		egressUtilisation = egress.utilisation
 		egressBandwidth = egress.bandwidth
 	end
 	if egress.baselineComparision then
@@ -647,7 +636,6 @@ local function adjustSqm()
 	getQdisc(ingress)
 
 	updatePingStatistics()
-
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
@@ -934,7 +922,7 @@ local function initialise()
 		return
 	end
 
-	pingIncreaseResistance = 0.99
+	pingIncreaseResistance = 0.98
 	pingDecreaseResistance = 0.05
 	stablePersistence = 0.9
 	stableSeconds = 2
