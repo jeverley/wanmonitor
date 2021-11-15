@@ -31,7 +31,6 @@ local interval
 local iptype
 local pingIncreaseResistance
 local pingDecreaseResistance
-local peakPersistence
 local assuredResistance
 local stablePersistence
 local stableSeconds
@@ -99,19 +98,6 @@ end
 
 local function mean(sample)
 	return sum(sample) / #sample
-end
-
-local function median(values)
-	local sorted = {}
-	for i = 1, #values do
-		table.insert(sorted, values[i])
-	end
-	table.sort(sorted)
-	local middle = #sorted * 0.5
-	if #sorted % 2 == 0 then
-		return (sorted[middle] + sorted[middle + 1]) * 0.5
-	end
-	return sorted[middle + 0.5]
 end
 
 local function updateSample(sample, observation, period)
@@ -279,7 +265,9 @@ local function updateRateStatistics(qdisc)
 		qdisc.assuredSample = {}
 		qdisc.assured = 0
 	end
-	if ping.current < ping.limit or qdisc.rate < qdisc.assured or qdisc.utilisation < qdisc.assuredTarget then
+	if ping.current < ping.limit or qdisc.rate < qdisc.assured then
+		assured = qdisc.rate
+	elseif qdisc.utilisation < qdisc.assuredTarget then
 		assured = qdisc.rate * 0.98
 	elseif qdisc.rate * qdisc.assuredTarget > qdisc.assured then
 		assured = qdisc.rate * qdisc.assuredTarget
@@ -293,12 +281,6 @@ local function updateRateStatistics(qdisc)
 		qdisc.stable = qdisc.assured
 	else
 		qdisc.stable = qdisc.stable * stablePersistence + qdisc.assured * (1 - stablePersistence)
-	end
-
-	if not qdisc.peak or qdisc.assured > qdisc.peak then
-		qdisc.peak = qdisc.assured
-	else
-		qdisc.peak = qdisc.peak * peakPersistence + qdisc.assured * (1 - peakPersistence)
 	end
 
 	qdisc.minimum = math.max(qdisc.maximum * 0.01, qdisc.assured)
@@ -376,26 +358,6 @@ local function adjustDecreaseChances()
 	end
 end
 
-local function updateCooldown(qdisc)
-	if not qdisc.bandwidth then
-		qdisc.cooldown = nil
-		return
-	end
-
-	if not qdisc.cooldown or ping.clear > stableSeconds then
-		qdisc.cooldown = 0
-	end
-
-	if qdisc.decreaseChance and qdisc.decreaseChance > 0.01 then
-		qdisc.cooldown = qdisc.cooldown + interval
-		return
-	end
-
-	if ping.current < ping.limit and qdisc.cooldown > 0 then
-		qdisc.cooldown = qdisc.cooldown - interval
-	end
-end
-
 local function calculateDecrease(qdisc)
 	qdisc.change = (qdisc.bandwidth - qdisc.minimum) * qdisc.decreaseChance * -1
 
@@ -430,7 +392,6 @@ local function calculateChange(qdisc)
 
 	if
 		ping.current < ping.target
-		and qdisc.cooldown == 0
 		and ping.clear >= stableSeconds
 		and (qdisc.assured > qdisc.bandwidth * 0.95 or math.random(1, 10) <= 5 * interval)
 	then
@@ -693,9 +654,6 @@ local function adjustSqm()
 	calculateDecreaseChance(egress, ingress)
 	calculateDecreaseChance(ingress, egress)
 	adjustDecreaseChances()
-
-	updateCooldown(egress)
-	updateCooldown(ingress)
 
 	calculateChange(egress)
 	calculateChange(ingress)
@@ -978,8 +936,6 @@ local function initialise()
 
 	pingIncreaseResistance = 0.99
 	pingDecreaseResistance = 0.05
-	peakPersistence = 0.98
-	assuredResistance = 0.6
 	stablePersistence = 0.9
 	stableSeconds = 2
 	egress.assuredTarget = 0.7
@@ -990,16 +946,6 @@ local function initialise()
 		ingress.device = "ifb4" .. string.sub(device, 1, 11)
 	else
 		ingress.device = config.ingressDevice
-	end
-
-	if config.peakPersistence then
-		config.peakPersistence = tonumber(config.peakPersistence)
-		if not config.peakPersistence or config.peakPersistence <= 0 or config.peakPersistence > 1 then
-			log("LOG_ERR", "Invalid peakPersistence config value specified for " .. interface)
-			os.exit()
-		else
-			peakPersistence = config.peakPersistence
-		end
 	end
 
 	if config.stablePersistence then
@@ -1065,9 +1011,7 @@ local function initialise()
 	stablePeriod = stableSeconds / interval
 	pingIncreaseResistance = pingIncreaseResistance ^ interval
 	pingDecreaseResistance = pingDecreaseResistance ^ interval
-	assuredResistance = assuredResistance ^ interval
 	stablePersistence = stablePersistence ^ interval
-	peakPersistence = peakPersistence ^ interval
 end
 
 local function daemonise()
