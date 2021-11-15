@@ -29,11 +29,10 @@ local dscp
 local hosts
 local interval
 local iptype
-local pingIncreasePersistence
-local pingDecreasePersistence
-local shortPeakPersistence
-local longPeakPersistence
-local pingPersistence
+local pingIncreaseResistance
+local pingDecreaseResistance
+local peakPersistence
+local assuredResistance
 local stablePersistence
 local stableSeconds
 local stablePeriod
@@ -108,6 +107,14 @@ local function movingMean(sample, observation, period)
 		table.remove(sample, 1)
 	end
 	return mean(sample)
+end
+
+local function movingMaximum(sample, observation, period)
+	table.insert(sample, observation)
+	while #sample > period do
+		table.remove(sample, 1)
+	end
+	return math.max(unpack(sample))
 end
 
 local function readFile(file)
@@ -185,13 +192,13 @@ local function uciGet(config, section, option, sectionType)
 	return response.value
 end
 
-local function wanFirewallConfig()
+local function firewallZoneConfig(zone)
 	local zones = uciGet("firewall", nil, nil, "zone")
 	if not zones then
 		return
 	end
 	for k, v in pairs(zones) do
-		if v.name == "wan" then
+		if v.name == zone then
 			return v
 		end
 	end
@@ -220,13 +227,13 @@ local function updatePingStatistics()
 	end
 
 	if ping.current > ping.baseline then
-		ping.baseline = ping.baseline * pingIncreasePersistence + ping.current * (1 - pingIncreasePersistence)
+		ping.baseline = ping.baseline * pingIncreaseResistance + ping.current * (1 - pingIncreaseResistance)
 	else
-		ping.baseline = ping.baseline * pingDecreasePersistence + ping.current * (1 - pingDecreasePersistence)
+		ping.baseline = ping.baseline * pingDecreaseResistance + ping.current * (1 - pingDecreaseResistance)
 	end
 
 	ping.limit = ping.baseline * 1.9
-	ping.target = ping.baseline * 1.4
+	ping.target = ping.baseline * 1.3
 
 	if ping.current > ping.limit then
 		ping.clear = 0
@@ -245,50 +252,39 @@ local function updatePingStatistics()
 end
 
 local function updateRateStatistics(qdisc)
-	local assured
-	local assuredMax
-	local assuredMean
-
 	if not qdisc.meanSample then
 		qdisc.meanSample = {}
 	end
 	qdisc.mean = movingMean(qdisc.meanSample, qdisc.rate, stablePeriod)
 
+	local assured
 	if not qdisc.assuredSample then
 		qdisc.assuredSample = {}
-		assuredMax = 0
-	else
-		assuredMax = math.max(unpack(qdisc.assuredSample))
+		qdisc.assured = 0
 	end
-	if ping.current < ping.target or qdisc.rate < assuredMax then
+	if ping.current < ping.target or qdisc.rate < qdisc.assured then
 		assured = qdisc.rate
-	elseif qdisc.rate * qdisc.assuredTarget > assuredMax then
+	elseif qdisc.rate * qdisc.assuredTarget > qdisc.assured then
 		assured = qdisc.rate * qdisc.assuredTarget
 	else
-		assured = assuredMax
+		assured = qdisc.assured * assuredResistance + qdisc.rate * (1 - assuredResistance)
 	end
-	assuredMean = movingMean(qdisc.assuredSample, assured, stablePeriod)
+	qdisc.assured = movingMaximum(qdisc.assuredSample, assured, stablePeriod)
 
-	if not qdisc.stable or ping.current < ping.target then
-		qdisc.stable = assuredMean
+	if ping.current < ping.target or not qdisc.stable then
+		qdisc.stable = qdisc.assured
 	else
-		qdisc.stable = qdisc.stable * stablePersistence + assuredMean * (1 - stablePersistence)
+		qdisc.stable = qdisc.stable * stablePersistence + qdisc.assured * (1 - stablePersistence)
 	end
 
-	if not qdisc.shortPeak or qdisc.rate > qdisc.shortPeak then
-		qdisc.shortPeak = qdisc.rate
+	if not qdisc.peak or qdisc.assured > qdisc.peak then
+		qdisc.peak = qdisc.assured
 	else
-		qdisc.shortPeak = qdisc.shortPeak * shortPeakPersistence + qdisc.rate * (1 - shortPeakPersistence)
+		qdisc.peak = qdisc.peak * peakPersistence + qdisc.assured * (1 - peakPersistence)
 	end
 
-	if not qdisc.longPeak or qdisc.rate > qdisc.longPeak then
-		qdisc.longPeak = qdisc.rate
-	else
-		qdisc.longPeak = qdisc.longPeak * longPeakPersistence + qdisc.rate * (1 - longPeakPersistence)
-	end
-
-	if not qdisc.maximum or assured > qdisc.maximum then
-		qdisc.maximum = assured
+	if not qdisc.maximum or qdisc.rate > qdisc.maximum then
+		qdisc.maximum = qdisc.rate
 	end
 
 	if qdisc.bandwidth then
@@ -299,7 +295,11 @@ local function updateRateStatistics(qdisc)
 		qdisc.utilisation = nil
 	end
 
-	qdisc.minimum = math.max(qdisc.maximum * 0.01, assuredMean, assured)
+	if qdisc.utilisation and qdisc.utilisation < qdisc.assuredTarget then
+		qdisc.minimum = math.max(qdisc.maximum * 0.01, qdisc.assured, qdisc.rate * 0.98)
+	else
+		qdisc.minimum = math.max(qdisc.maximum * 0.01, qdisc.assured)
+	end
 end
 
 local function calculateDecreaseChance(qdisc, compared)
@@ -310,10 +310,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		return
 	end
 
-	local baseline = qdisc.stable * 0.5
-		+ qdisc.mean * 0.05
-		+ qdisc.shortPeak * qdisc.assuredTarget * 0.4
-		+ qdisc.longPeak * qdisc.assuredTarget * 0.05
+	local baseline = qdisc.stable * 0.4 + qdisc.assured * 0.4 + qdisc.peak * 0.2
 	qdisc.baselineComparision = (qdisc.rate - baseline) / baseline
 
 	if qdisc.baselineComparision < 0 then
@@ -341,7 +338,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
 
-	local pingReducer = 1 - ping.limit * 0.99 / ping.current
+	local pingReducer = 1 - ping.baseline / ping.current * 0.9
 	qdisc.decreaseChance = qdisc.baselineComparision * qdisc.decreaseChanceReducer * pingReducer
 end
 
@@ -433,7 +430,7 @@ local function calculateChange(qdisc)
 		ping.current < ping.target
 		and qdisc.cooldown == 0
 		and ping.clear >= stableSeconds
-		and (qdisc.stable > qdisc.bandwidth * 0.95 or math.random(1, 10) <= 5 * interval)
+		and (qdisc.assured > qdisc.bandwidth * 0.95 or math.random(1, 10) <= 5 * interval)
 	then
 		calculateIncrease(qdisc)
 		return
@@ -668,7 +665,7 @@ local function mssClamp(qdisc)
 	elseif qdisc.bandwidth >= 3000 and qdisc.mssClamp ~= false then
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
-		local wan = wanFirewallConfig()
+		local wan = firewallZoneConfig("wan")
 		if wan and toboolean(wan.mtu_fix) == true then
 			os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
 			os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
@@ -977,11 +974,10 @@ local function initialise()
 		return
 	end
 
-	pingIncreasePersistence = 0.985
-	pingDecreasePersistence = 0.05
-	shortPeakPersistence = 0.1
-	longPeakPersistence = 0.98
-	pingPersistence = 0.99
+	pingIncreaseResistance = 0.99
+	pingDecreaseResistance = 0.05
+	peakPersistence = 0.98
+	assuredResistance = 0.6
 	stablePersistence = 0.9
 	stableSeconds = 2
 	egress.assuredTarget = 0.7
@@ -994,33 +990,13 @@ local function initialise()
 		ingress.device = config.ingressDevice
 	end
 
-	if config.shortPeakPersistence then
-		config.shortPeakPersistence = tonumber(config.shortPeakPersistence)
-		if not config.shortPeakPersistence or config.shortPeakPersistence <= 0 or config.shortPeakPersistence > 1 then
-			log("LOG_ERR", "Invalid shortPeakPersistence config value specified for " .. interface)
+	if config.peakPersistence then
+		config.peakPersistence = tonumber(config.peakPersistence)
+		if not config.peakPersistence or config.peakPersistence <= 0 or config.peakPersistence > 1 then
+			log("LOG_ERR", "Invalid peakPersistence config value specified for " .. interface)
 			os.exit()
 		else
-			shortPeakPersistence = config.shortPeakPersistence
-		end
-	end
-
-	if config.longPeakPersistence then
-		config.longPeakPersistence = tonumber(config.longPeakPersistence)
-		if not config.longPeakPersistence or config.longPeakPersistence <= 0 or config.longPeakPersistence > 1 then
-			log("LOG_ERR", "Invalid longPeakPersistence config value specified for " .. interface)
-			os.exit()
-		else
-			longPeakPersistence = config.longPeakPersistence
-		end
-	end
-
-	if config.pingPersistence then
-		config.pingPersistence = tonumber(config.pingPersistence)
-		if not config.pingPersistence or config.pingPersistence <= 0 or config.pingPersistence > 1 then
-			log("LOG_ERR", "Invalid pingPersistence config value specified for " .. interface)
-			os.exit()
-		else
-			pingPersistence = config.pingPersistence
+			peakPersistence = config.peakPersistence
 		end
 	end
 
@@ -1085,12 +1061,11 @@ local function initialise()
 	end
 
 	stablePeriod = stableSeconds / interval
-	pingIncreasePersistence = pingIncreasePersistence ^ interval
-	pingDecreasePersistence = pingDecreasePersistence ^ interval
-	shortPeakPersistence = shortPeakPersistence ^ interval
-	longPeakPersistence = longPeakPersistence ^ interval
-	pingPersistence = pingPersistence ^ interval
+	pingIncreaseResistance = pingIncreaseResistance ^ interval
+	pingDecreaseResistance = pingDecreaseResistance ^ interval
+	assuredResistance = assuredResistance ^ interval
 	stablePersistence = stablePersistence ^ interval
+	peakPersistence = peakPersistence ^ interval
 end
 
 local function daemonise()
