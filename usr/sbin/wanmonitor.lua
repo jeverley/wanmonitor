@@ -101,20 +101,24 @@ local function mean(sample)
 	return sum(sample) / #sample
 end
 
-local function movingMean(sample, observation, period)
-	table.insert(sample, observation)
-	while #sample > period do
-		table.remove(sample, 1)
+local function median(values)
+	local sorted = {}
+	for i = 1, #values do
+		table.insert(sorted, values[i])
 	end
-	return mean(sample)
+	table.sort(sorted)
+	local middle = #sorted * 0.5
+	if #sorted % 2 == 0 then
+		return (sorted[middle] + sorted[middle + 1]) * 0.5
+	end
+	return sorted[middle + 0.5]
 end
 
-local function movingMaximum(sample, observation, period)
+local function updateSample(sample, observation, period)
 	table.insert(sample, observation)
 	while #sample > period do
 		table.remove(sample, 1)
 	end
-	return math.max(unpack(sample))
 end
 
 local function readFile(file)
@@ -233,7 +237,7 @@ local function updatePingStatistics()
 	end
 
 	ping.limit = ping.baseline * 1.9
-	ping.target = ping.baseline * 1.3
+	ping.target = ping.baseline * 1.4
 
 	if ping.current > ping.limit then
 		ping.clear = 0
@@ -255,21 +259,35 @@ local function updateRateStatistics(qdisc)
 	if not qdisc.rateSample then
 		qdisc.rateSample = {}
 	end
-	qdisc.mean = movingMean(qdisc.rateSample, qdisc.rate, stablePeriod)
+	updateSample(qdisc.rateSample, qdisc.rate, stablePeriod)
+	qdisc.mean = mean(qdisc.rateSample)
+
+	if not qdisc.maximum or qdisc.rate > qdisc.maximum then
+		qdisc.maximum = qdisc.rate
+	end
+
+	if qdisc.bandwidth then
+		qdisc.target = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum)
+		qdisc.utilisation = qdisc.rate / qdisc.bandwidth
+	else
+		qdisc.target = 0
+		qdisc.utilisation = 0
+	end
 
 	local assured
 	if not qdisc.assuredSample then
 		qdisc.assuredSample = {}
 		qdisc.assured = 0
 	end
-	if ping.current < ping.target or qdisc.rate < qdisc.assured then
-		assured = qdisc.rate
+	if ping.current < ping.limit or qdisc.rate < qdisc.assured or qdisc.utilisation < qdisc.assuredTarget then
+		assured = qdisc.rate * 0.98
 	elseif qdisc.rate * qdisc.assuredTarget > qdisc.assured then
 		assured = qdisc.rate * qdisc.assuredTarget
 	else
-		assured = math.max(mean(qdisc.assuredSample), math.min(unpack(qdisc.rateSample)) * 0.98)
+		assured = qdisc.assured
 	end
-	qdisc.assured = movingMaximum(qdisc.assuredSample, assured, stablePeriod)
+	updateSample(qdisc.assuredSample, assured, stablePeriod)
+	qdisc.assured = (math.max(unpack(qdisc.assuredSample)) + mean(qdisc.assuredSample)) * 0.5
 
 	if ping.current < ping.target or not qdisc.stable then
 		qdisc.stable = qdisc.assured
@@ -283,23 +301,7 @@ local function updateRateStatistics(qdisc)
 		qdisc.peak = qdisc.peak * peakPersistence + qdisc.assured * (1 - peakPersistence)
 	end
 
-	if not qdisc.maximum or qdisc.rate > qdisc.maximum then
-		qdisc.maximum = qdisc.rate
-	end
-
-	if qdisc.bandwidth then
-		qdisc.target = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum)
-		qdisc.utilisation = qdisc.rate / qdisc.bandwidth
-	else
-		qdisc.target = nil
-		qdisc.utilisation = nil
-	end
-
-	if qdisc.utilisation and qdisc.utilisation < qdisc.assuredTarget then
-		qdisc.minimum = math.max(qdisc.maximum * 0.01, qdisc.assured, qdisc.rate * 0.98)
-	else
-		qdisc.minimum = math.max(qdisc.maximum * 0.01, qdisc.assured)
-	end
+	qdisc.minimum = math.max(qdisc.maximum * 0.01, qdisc.assured)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
@@ -310,7 +312,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		return
 	end
 
-	local baseline = qdisc.stable * 0.5 + qdisc.assured * 0.3 + qdisc.peak * 0.2
+	local baseline = qdisc.stable * 0.65 + qdisc.assured * 0.35
 	qdisc.baselineComparision = (qdisc.rate - baseline) / baseline
 
 	if qdisc.baselineComparision < 0 then
@@ -325,7 +327,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
 
-	if compared.utilisation and compared.utilisation > 1 then
+	if compared.utilisation and compared.utilisation > 0.98 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.7 / compared.utilisation
 	end
 
@@ -338,7 +340,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
 
-	local pingReducer = 1 - (ping.limit / ping.current) ^ 5
+	local pingReducer = 1 - (ping.limit / ping.current) ^ 1.1
 	qdisc.decreaseChance = qdisc.baselineComparision * qdisc.decreaseChanceReducer * pingReducer
 end
 
@@ -347,7 +349,7 @@ local function adjustDecreaseChances()
 		return
 	end
 
-	local amplify = 7
+	local amplify = 5
 	if egress.decreaseChance and not ingress.decreaseChance then
 		if egress.decreaseChance > 1 then
 			egress.decreaseChance = 1
@@ -380,7 +382,7 @@ local function updateCooldown(qdisc)
 		return
 	end
 
-	if not qdisc.cooldown then
+	if not qdisc.cooldown or ping.clear > stableSeconds then
 		qdisc.cooldown = 0
 	end
 
@@ -588,9 +590,9 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.rate)
 		.. ";	"
-		.. string.format("%.2f", ingress.minimum)
+		.. string.format("%.2f", ingress.assured)
 		.. ";	"
-		.. string.format("%.2f", egress.minimum)
+		.. string.format("%.2f", egress.assured)
 		.. ";	"
 		.. string.format(
 			"%.2f",
