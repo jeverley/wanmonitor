@@ -245,25 +245,29 @@ local function updatePingStatistics()
 end
 
 local function updateRateStatistics(qdisc)
+	local assured
+	local assuredMax
+	local assuredMean
+
 	if not qdisc.meanSample then
 		qdisc.meanSample = {}
 	end
 	qdisc.mean = movingMean(qdisc.meanSample, qdisc.rate, stablePeriod)
 
-	local assured = qdisc.rate
-	if ping.current > ping.target then
-		assured = assured * qdisc.assuredTarget
-	end
-
 	if not qdisc.assuredSample then
 		qdisc.assuredSample = {}
-	end
-	local assuredMean
-	if ping.current < ping.target or qdisc.assuredSample[1] and qdisc.rate < math.max(unpack(qdisc.assuredSample)) then
-		assuredMean = movingMean(qdisc.assuredSample, qdisc.rate, stablePeriod)
+		assuredMax = 0
 	else
-		assuredMean = movingMean(qdisc.assuredSample, assured, stablePeriod)
+		assuredMax = math.max(unpack(qdisc.assuredSample))
 	end
+	if ping.current < ping.target or qdisc.rate < assuredMax then
+		assured = qdisc.rate
+	elseif qdisc.rate * qdisc.assuredTarget > assuredMax then
+		assured = qdisc.rate * qdisc.assuredTarget
+	else
+		assured = assuredMax
+	end
+	assuredMean = movingMean(qdisc.assuredSample, assured, stablePeriod)
 
 	if not qdisc.stable or ping.current < ping.target then
 		qdisc.stable = assuredMean
@@ -295,11 +299,7 @@ local function updateRateStatistics(qdisc)
 		qdisc.utilisation = nil
 	end
 
-	if qdisc.utilisation and qdisc.utilisation < 0.98 then
-		qdisc.minimum = math.max(qdisc.maximum * 0.01, assuredMean, qdisc.rate * 0.98)
-	else
-		qdisc.minimum = math.max(qdisc.maximum * 0.01, assuredMean, assured)
-	end
+	qdisc.minimum = math.max(qdisc.maximum * 0.01, assuredMean, assured)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
@@ -1116,7 +1116,7 @@ local function main()
 	writeFile(pidFile, pid)
 
 	log("LOG_NOTICE", "Started for " .. interface .. " (" .. device .. ")")
-	
+
 	retriesRemaining = retries
 	while retriesRemaining > 0 do
 		pingLoop()
