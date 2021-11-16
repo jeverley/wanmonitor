@@ -451,23 +451,11 @@ local function updateRateStatistics(qdisc)
 		qdisc.maximum = qdisc.rate
 	end
 
-	if not qdisc.peak or qdisc.rate > qdisc.peak then
-		qdisc.peak = qdisc.rate
-	else
-		qdisc.peak = qdisc.peak * 0.999 ^ interval
-	end
-
 	if qdisc.bandwidth then
 		qdisc.utilisation = qdisc.rate / qdisc.bandwidth
 	else
 		qdisc.utilisation = 0
 	end
-
-	if not qdisc.rateSample then
-		qdisc.rateSample = {}
-	end
-	updateSample(qdisc.rateSample, qdisc.rate, stablePeriod)
-	qdisc.mean = mean(qdisc.rateSample)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
@@ -479,11 +467,10 @@ local function calculateDecreaseChance(qdisc, compared)
 	end
 
 	if not qdisc.stable then
-		qdisc.stable = 0
+		qdisc.stable = 1
 	end
 
-	local baseline = qdisc.stable * 0.7 + qdisc.peak * 0.3
-	qdisc.baselineComparision = (qdisc.rate - baseline) / baseline
+	qdisc.baselineComparision = (qdisc.rate - qdisc.stable) / qdisc.stable
 
 	if qdisc.baselineComparision <= 0 then
 		qdisc.decreaseChance = nil
@@ -501,10 +488,6 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.7 / compared.utilisation
 	end
 
-	if ping.current < ping.limit * 4 then
-		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * (ping.current / (ping.limit * 4)) ^ 2
-	end
-
 	qdisc.decreaseChance = qdisc.baselineComparision * qdisc.decreaseChanceReducer
 end
 
@@ -513,38 +496,38 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
+	local amplify = 7
 	if not compared.decreaseChance then
 		if qdisc.decreaseChance > 1 then
 			qdisc.decreaseChance = 1
 		end
-		return
-	end
-
-	local amplify = 7
-	if qdisc.decreaseChance < compared.decreaseChance then
+	elseif qdisc.decreaseChance < compared.decreaseChance then
 		if compared.decreaseChance > 1 then
 			qdisc.decreaseChance = qdisc.decreaseChance / compared.decreaseChance
 			qdisc.decreaseChance = qdisc.decreaseChance * qdisc.decreaseChance ^ amplify
 		else
 			qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
 		end
-		return
+	elseif qdisc.decreaseChance > 1 then
+		qdisc.decreaseChance = 1
 	end
 
-	if qdisc.decreaseChance > 1 then
-		qdisc.decreaseChance = 1
+	if ping.current < ping.limit * 4 then
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 4)) ^ 2
 	end
 end
 
 local function calculateAssuredRate(qdisc)
-	if not qdisc.assuredSample then
+	if not qdisc.assuredSample or ping.current < ping.limit then
 		qdisc.assuredSample = {}
+	end
+	if not qdisc.assured or ping.current < ping.target and qdisc.rate * qdisc.assuredTarget > qdisc.assured then
 		qdisc.assured = qdisc.rate * qdisc.assuredTarget
-	elseif ping.current < ping.limit then
-		qdisc.assuredSample = {}
-	else
+	elseif ping.current > ping.limit then
 		updateSample(qdisc.assuredSample, qdisc.rate * qdisc.assuredTarget, stablePeriod)
-		qdisc.assured = math.min(unpack(qdisc.assuredSample)) * 0.8 + mean(qdisc.assuredSample) * 0.2
+		qdisc.assured = math.min(unpack(qdisc.assuredSample)) * 0.7 + mean(qdisc.assuredSample) * 0.3
+	else
+		qdisc.assured = qdisc.assured * 0.99 ^ interval
 	end
 
 	if not qdisc.decreaseChance or qdisc.decreaseChance < 0.01 then
