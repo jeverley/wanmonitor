@@ -479,7 +479,7 @@ local function calculateDecreaseChance(qdisc, compared)
 	end
 
 	if not qdisc.stable then
-		qdisc.stable = qdisc.mean * assuredTarget
+		qdisc.stable = 0
 	end
 
 	local baseline = qdisc.stable * 0.7 + qdisc.peak * 0.3
@@ -520,7 +520,7 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
-	local amplify = 10
+	local amplify = 7
 	if qdisc.decreaseChance < compared.decreaseChance then
 		if compared.decreaseChance > 1 then
 			qdisc.decreaseChance = qdisc.decreaseChance / compared.decreaseChance
@@ -537,22 +537,18 @@ local function adjustDecreaseChance(qdisc, compared)
 end
 
 local function calculateAssuredRate(qdisc)
-	local assured
-	if ping.current < ping.limit or not qdisc.assuredSample or qdisc.decreaseChance and qdisc.decreaseChance < 0.01 then
+	if not qdisc.assuredSample then
 		qdisc.assuredSample = {}
-		qdisc.assured = qdisc.rate
+		qdisc.assured = qdisc.rate * qdisc.assuredTarget
+	elseif ping.current < ping.limit then
+		qdisc.assuredSample = {}
 	else
-		if qdisc.rate < qdisc.assured then
-			assured = qdisc.rate
-		else
-			assured = qdisc.rate * qdisc.assuredTarget
-		end
-		updateSample(qdisc.assuredSample, assured, stablePeriod)
-		qdisc.assured = math.min(unpack(qdisc.assuredSample)) * 0.5 + mean(qdisc.assuredSample) * 0.5
+		updateSample(qdisc.assuredSample, qdisc.rate * qdisc.assuredTarget, stablePeriod)
+		qdisc.assured = math.min(unpack(qdisc.assuredSample)) * 0.8 + mean(qdisc.assuredSample) * 0.2
 	end
 
-	if not qdisc.decreaseChance or qdisc.decreaseChance and qdisc.decreaseChance < 0.01 then
-		qdisc.stable = qdisc.assured * qdisc.assuredTarget
+	if not qdisc.decreaseChance or qdisc.decreaseChance < 0.01 then
+		qdisc.stable = qdisc.assured
 	end
 end
 
@@ -590,7 +586,7 @@ local function calculateChange(qdisc)
 	if
 		ping.current < ping.target
 		and ping.clear >= stableSeconds
-		and (qdisc.mean > qdisc.bandwidth * 0.95 or math.random(1, 10) <= 5 * interval)
+		and (qdisc.assured > qdisc.bandwidth * 0.95 or math.random(1, 10) <= 5 * interval)
 	then
 		calculateIncrease(qdisc)
 		return
