@@ -479,13 +479,13 @@ local function calculateDecreaseChance(qdisc, compared)
 	end
 
 	if not qdisc.stable then
-		qdisc.stable = qdisc.mean
+		qdisc.stable = qdisc.mean * assuredTarget
 	end
 
 	local baseline = qdisc.stable * 0.7 + qdisc.peak * 0.3
 	qdisc.baselineComparision = (qdisc.rate - baseline) / baseline
 
-	if qdisc.baselineComparision < 0 then
+	if qdisc.baselineComparision <= 0 then
 		qdisc.decreaseChance = nil
 		qdisc.decreaseChanceReducer = nil
 		return
@@ -522,12 +522,12 @@ local function adjustDecreaseChance(qdisc, compared)
 
 	local amplify = 10
 	if qdisc.decreaseChance < compared.decreaseChance then
-		local comparedChance = compared.decreaseChance
-		if comparedChance > 1 then
-			qdisc.decreaseChance = qdisc.decreaseChance / comparedChance
-			comparedChance = 1
+		if compared.decreaseChance > 1 then
+			qdisc.decreaseChance = qdisc.decreaseChance / compared.decreaseChance
+			qdisc.decreaseChance = qdisc.decreaseChance * qdisc.decreaseChance ^ amplify
+		else
+			qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
 		end
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / comparedChance) ^ amplify
 		return
 	end
 
@@ -538,27 +538,26 @@ end
 
 local function calculateAssuredRate(qdisc)
 	local assured
-	if ping.current < ping.limit or not qdisc.assuredSample then
+	if ping.current < ping.limit or not qdisc.assuredSample or qdisc.decreaseChance and qdisc.decreaseChance < 0.01 then
 		qdisc.assuredSample = {}
-		qdisc.assured = qdisc.rate * qdisc.assuredTarget
+		qdisc.assured = qdisc.rate
 	else
-		if qdisc.rate < qdisc.assured or qdisc.decreaseChance and qdisc.decreaseChance < 0.01 then
+		if qdisc.rate < qdisc.assured then
 			assured = qdisc.rate
 		else
 			assured = qdisc.rate * qdisc.assuredTarget
 		end
 		updateSample(qdisc.assuredSample, assured, stablePeriod)
-		qdisc.assured = math.min(unpack(qdisc.assuredSample)) * 0.75 + mean(qdisc.assuredSample) * 0.25
+		qdisc.assured = math.min(unpack(qdisc.assuredSample)) * 0.5 + mean(qdisc.assuredSample) * 0.5
 	end
 
 	if not qdisc.decreaseChance or qdisc.decreaseChance and qdisc.decreaseChance < 0.01 then
-		qdisc.stable = qdisc.assured
+		qdisc.stable = qdisc.assured * qdisc.assuredTarget
 	end
 end
 
 local function calculateDecrease(qdisc)
-	qdisc.minimum = math.max(qdisc.maximum * 0.01, qdisc.assured)
-	qdisc.change = (qdisc.bandwidth - qdisc.minimum) * qdisc.decreaseChance * -1
+	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
 
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
@@ -566,12 +565,10 @@ local function calculateDecrease(qdisc)
 end
 
 local function calculateIncrease(qdisc)
-	qdisc.target = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum)
-	local targetMultiplier = qdisc.target / qdisc.bandwidth
+	local targetMultiplier = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum) / qdisc.bandwidth
 	if targetMultiplier < 1 then
 		targetMultiplier = targetMultiplier ^ 20
 	end
-
 	qdisc.change = qdisc.bandwidth * 0.05 * targetMultiplier
 
 	if qdisc.change < 0.008 then
