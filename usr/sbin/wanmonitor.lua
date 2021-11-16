@@ -194,6 +194,59 @@ local function firewallZoneConfig(zone)
 	end
 end
 
+local function iptablesRuleCleanup(table, chain, rule)
+	local escapedRule = string.gsub(rule, "([().%+-*?[^$])", "%%%1")
+	for line in string.gmatch(execute("iptables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
+		if string.find(line, escapedRule) then
+			os.execute("iptables -t " .. table .. " -D " .. chain .. " " .. rule)
+		end
+	end
+	for line in string.gmatch(execute("ip6tables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
+		if string.find(line, escapedRule) then
+			os.execute("ip6tables -t " .. table .. " -D " .. chain .. " " .. rule)
+		end
+	end
+end
+
+local function mssClamp(qdisc)
+	if not mssJitterFix or not qdisc.bandwidth then
+		return
+	end
+
+	local direction
+	local directionArg
+	if qdisc.device == device then
+		direction = "egress"
+		directionArg = "-i"
+	else
+		direction = "ingress"
+		directionArg = "-o"
+	end
+	local pmtuClampArgs =
+		'-p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "!fw3: Zone wan MTU fixing" -j TCPMSS --clamp-mss-to-pmtu'
+	local jitterClampArgs =
+		'-p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "Clamp MSS to reduce jitter" -j TCPMSS --set-mss 540'
+
+	if qdisc.bandwidth < 3000 and qdisc.mssClamp ~= true then
+		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
+		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
+		os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
+		os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
+		log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to 540")
+		qdisc.mssClamp = true
+	elseif qdisc.bandwidth >= 3000 and qdisc.mssClamp ~= false then
+		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
+		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
+		local wan = firewallZoneConfig("wan")
+		if wan and toboolean(wan.mtu_fix) == true then
+			os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
+			os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
+			log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to PMTU")
+		end
+		qdisc.mssClamp = false
+	end
+end
+
 local function interfaceStatus(interface)
 	return jsonc.parse(execute("ubus call network.interface." .. interface .. " status 2>/dev/null"))
 end
@@ -212,6 +265,7 @@ end
 local function updatePingStatistics()
 	if not ping.baseline then
 		ping.clear = 0
+		ping.latent = 0
 		ping.baseline = rtt
 	end
 
@@ -224,57 +278,79 @@ local function updatePingStatistics()
 	ping.limit = ping.baseline * 1.9
 	ping.target = ping.baseline * 1.4
 
-	if ping.current > ping.target then
-		ping.clear = 0
+	if ping.current < ping.target then
+		ping.clear = ping.clear + interval
+		ping.latent = 0
+		ping.decreaseChanceReducer = nil
 		return
 	end
 
-	ping.clear = ping.clear + interval
+	if ping.current < ping.limit then
+		ping.clear = 0
+		ping.latent = 0
+		ping.decreaseChanceReducer = nil
+		return
+	end
+
+	ping.latent = ping.latent + interval
+	ping.clear = 0
+
+	if ping.current > ping.limit * 4 then
+		ping.decreaseChanceReducer = 1
+	else
+		ping.decreaseChanceReducer = (ping.current / (ping.limit * 4)) ^ 1.5
+	end
 end
 
 local function updateRateStatistics(qdisc)
-	if not qdisc.rateSample then
-		qdisc.rateSample = {}
-	end
-	updateSample(qdisc.rateSample, qdisc.rate, stablePeriod)
-	qdisc.mean = mean(qdisc.rateSample)
-
 	if not qdisc.maximum or qdisc.rate > qdisc.maximum then
 		qdisc.maximum = qdisc.rate
+	end
+
+	if not qdisc.peak or qdisc.rate > qdisc.peak then
+		qdisc.peak = qdisc.rate
+	else
+		qdisc.peak = qdisc.peak * 0.999 ^ interval
 	end
 
 	if qdisc.bandwidth then
 		qdisc.target = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum)
 		qdisc.utilisation = qdisc.rate / qdisc.bandwidth
 	else
-		qdisc.target = 0
+		qdisc.target = nil
 		qdisc.utilisation = 0
 	end
 
+	if not qdisc.rateSample then
+		qdisc.rateSample = {}
+	end
+	updateSample(qdisc.rateSample, qdisc.rate, stablePeriod)
+	qdisc.mean = mean(qdisc.rateSample)
+
 	local assured
-	if not qdisc.assuredSample then
+	if ping.current < ping.target or not qdisc.assuredSample then
 		qdisc.assuredSample = {}
 		qdisc.assured = 0
 	end
-	if ping.current < ping.limit or qdisc.rate < qdisc.assured then
+	if ping.current > ping.limit then
+		if qdisc.rate * qdisc.assuredTarget > qdisc.assured then
+			assured = qdisc.rate * qdisc.assuredTarget
+		else
+			assured = math.max(qdisc.assured, math.min(unpack(qdisc.rateSample)))
+		end
+	elseif ping.current > ping.target then
 		assured = qdisc.rate
-	elseif qdisc.utilisation < qdisc.assuredTarget then
-		assured = qdisc.rate * 0.98
-	elseif qdisc.rate * qdisc.assuredTarget > qdisc.assured then
-		assured = qdisc.rate * qdisc.assuredTarget
-	else
-		assured = qdisc.assured
 	end
-	updateSample(qdisc.assuredSample, assured, stablePeriod)
-	qdisc.assured = (math.max(unpack(qdisc.assuredSample)) + mean(qdisc.assuredSample)) * 0.5
+	if ping.current > ping.target then
+		updateSample(qdisc.assuredSample, assured, stablePeriod)
+		qdisc.assured = mean(qdisc.assuredSample)
+	end
 
 	if ping.current < ping.target or not qdisc.stable then
-		qdisc.stable = qdisc.assured
-	else
-		qdisc.stable = qdisc.stable * stablePersistence + qdisc.assured * (1 - stablePersistence)
+		qdisc.stable = qdisc.mean
 	end
 
-	qdisc.minimum = math.max(qdisc.maximum * 0.01, qdisc.assured)
+	qdisc.minimum = math.max(qdisc.maximum * 0.01, qdisc.rate * 0.98)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
@@ -285,7 +361,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		return
 	end
 
-	local baseline = qdisc.stable * 0.65 + qdisc.assured * 0.35
+	local baseline = qdisc.stable * 0.65 + qdisc.assured * 0.25 + qdisc.peak * 0.1
 	qdisc.baselineComparision = (qdisc.rate - baseline) / baseline
 
 	if qdisc.baselineComparision < 0 then
@@ -304,17 +380,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.7 / compared.utilisation
 	end
 
-	if
-		qdisc.rate > qdisc.mean * 0.9
-		and qdisc.rate < qdisc.mean * 1.05
-		and compared.rate > compared.mean * 0.8
-		and compared.rate < compared.mean * 0.9
-	then
-		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
-	end
-
-	local pingReducer = 1 - (ping.limit / ping.current) ^ 1.1
-	qdisc.decreaseChance = qdisc.baselineComparision * qdisc.decreaseChanceReducer * pingReducer
+	qdisc.decreaseChance = qdisc.baselineComparision * qdisc.decreaseChanceReducer * ping.decreaseChanceReducer
 end
 
 local function adjustDecreaseChances()
@@ -363,7 +429,7 @@ local function calculateIncrease(qdisc)
 		targetMultiplier = targetMultiplier ^ 20
 	end
 
-	qdisc.change = qdisc.bandwidth * 0.1 * targetMultiplier
+	qdisc.change = qdisc.bandwidth * 0.05 * targetMultiplier
 
 	if qdisc.change < 0.008 then
 		qdisc.change = 0
@@ -384,7 +450,7 @@ local function calculateChange(qdisc)
 	if
 		ping.current < ping.target
 		and ping.clear >= stableSeconds
-		and (qdisc.assured > qdisc.bandwidth * 0.95 or math.random(1, 10) <= 5 * interval)
+		and (qdisc.mean > qdisc.bandwidth * 0.95 or math.random(1, 10) <= 5 * interval)
 	then
 		calculateIncrease(qdisc)
 		return
@@ -437,43 +503,14 @@ local function updateQdisc(qdisc)
 end
 
 local function writeStatus()
-	if verbose then
-		writeFile(
-			statusFile,
-			jsonc.stringify({
-				interface = interface,
-				device = device,
-				ping = ping,
-				egress = egress,
-				ingress = ingress,
-			})
-		)
-		return
-	end
-
 	writeFile(
 		statusFile,
 		jsonc.stringify({
 			interface = interface,
 			device = device,
-			pingBaseline = ping.baseline,
-			ping = ping.current,
-			egress = {
-				device = egress.device,
-				target = egress.target,
-				bandwidth = egress.bandwidth,
-				maximum = egress.maximum,
-				rate = egress.rate,
-				change = egress.change,
-			},
-			ingress = {
-				device = ingress.device,
-				target = ingress.target,
-				bandwidth = ingress.bandwidth,
-				maximum = ingress.maximum,
-				rate = ingress.rate,
-				change = ingress.change,
-			},
+			ping = ping,
+			egress = egress,
+			ingress = ingress,
 		})
 	)
 end
@@ -571,59 +608,6 @@ local function adjustmentLog()
 	if logFile then
 		os.execute("mkdir -p $(dirname '" .. logFile .. "')")
 		writeFile(logFile, logLine .. "\n", "a")
-	end
-end
-
-local function iptablesRuleCleanup(table, chain, rule)
-	local escapedRule = string.gsub(rule, "([().%+-*?[^$])", "%%%1")
-	for line in string.gmatch(execute("iptables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
-		if string.find(line, escapedRule) then
-			os.execute("iptables -t " .. table .. " -D " .. chain .. " " .. rule)
-		end
-	end
-	for line in string.gmatch(execute("ip6tables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
-		if string.find(line, escapedRule) then
-			os.execute("ip6tables -t " .. table .. " -D " .. chain .. " " .. rule)
-		end
-	end
-end
-
-local function mssClamp(qdisc)
-	if not mssJitterFix or not qdisc.bandwidth then
-		return
-	end
-
-	local direction
-	local directionArg
-	if qdisc.device == device then
-		direction = "egress"
-		directionArg = "-i"
-	else
-		direction = "ingress"
-		directionArg = "-o"
-	end
-	local pmtuClampArgs =
-		'-p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "!fw3: Zone wan MTU fixing" -j TCPMSS --clamp-mss-to-pmtu'
-	local jitterClampArgs =
-		'-p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "Clamp MSS to reduce jitter" -j TCPMSS --set-mss 540'
-
-	if qdisc.bandwidth < 3000 and qdisc.mssClamp ~= true then
-		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
-		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
-		os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
-		os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
-		log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to 540")
-		qdisc.mssClamp = true
-	elseif qdisc.bandwidth >= 3000 and qdisc.mssClamp ~= false then
-		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
-		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
-		local wan = firewallZoneConfig("wan")
-		if wan and toboolean(wan.mtu_fix) == true then
-			os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
-			os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
-			log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to PMTU")
-		end
-		qdisc.mssClamp = false
 	end
 end
 
@@ -767,6 +751,7 @@ local function pingLoop()
 			.. " 2>&1"
 	)
 	childPid = execute("pgrep -n -x oping -P " .. pid)
+	childPid = tonumber(childPid)
 
 	repeat
 		local line = fd:read("*line")
@@ -922,7 +907,7 @@ local function initialise()
 		return
 	end
 
-	pingIncreaseResistance = 0.98
+	pingIncreaseResistance = 0.99
 	pingDecreaseResistance = 0.05
 	stablePersistence = 0.9
 	stableSeconds = 2
