@@ -14,17 +14,16 @@ local unistd = require("posix.unistd")
 local egress
 local ingress
 local interface
+local device
 local pid
 local pidFile
 local childPid
 local ping
-local pingStatus
 local statusFile
+
 local console
 local verbose
 local logFile
-
-local device
 local dscp
 local hosts
 local interval
@@ -42,10 +41,11 @@ local hostCount
 local responseCount
 local retries
 local retriesRemaining
+local intervalEpoch
+local previousEpoch
 local previousRxBytes
 local previousTxBytes
-local previousEpoch
-local intervalEpoch
+local pingStatus
 
 local function log(priority, message)
 	syslog.openlog("wanmonitor", syslog.LOG_PID, syslog.LOG_DAEMON)
@@ -60,12 +60,8 @@ local function cleanup()
 	if childPid then
 		signal.kill(childPid, signal.SIGKILL)
 	end
-	if pidFile then
-		os.remove(pidFile)
-	end
-	if statusFile then
-		os.remove(statusFile)
-	end
+	os.remove(pidFile)
+	os.remove(statusFile)
 end
 
 local function exit()
@@ -181,6 +177,10 @@ local function uciGet(config, section, option, sectionType)
 	return response.value
 end
 
+local function interfaceStatus(interface)
+	return jsonc.parse(execute("ubus call network.interface." .. interface .. " status 2>/dev/null"))
+end
+
 local function firewallZoneConfig(zone)
 	local zones = uciGet("firewall", nil, nil, "zone")
 	if not zones then
@@ -191,6 +191,17 @@ local function firewallZoneConfig(zone)
 			return v
 		end
 	end
+end
+
+local function interfaceReconnect(interface)
+	if not reconnect then
+		return
+	end
+
+	log("LOG_WARNING", "Requesting ifup for " .. interface)
+	cleanup()
+	os.execute("ifup " .. interface)
+	os.exit()
 end
 
 local function iptablesRuleCleanup(table, chain, rule)
@@ -246,21 +257,6 @@ local function mssClamp(qdisc)
 	end
 end
 
-local function interfaceStatus(interface)
-	return jsonc.parse(execute("ubus call network.interface." .. interface .. " status 2>/dev/null"))
-end
-
-local function interfaceReconnect(interface)
-	if not reconnect then
-		return
-	end
-
-	log("LOG_WARNING", "Requesting ifup for " .. interface)
-	cleanup()
-	os.execute("ifup " .. interface)
-	os.exit()
-end
-
 local function writeStatus()
 	writeFile(
 		statusFile,
@@ -272,49 +268,6 @@ local function writeStatus()
 			ingress = ingress,
 		})
 	)
-end
-
-local function getQdisc(qdisc)
-	if not qdisc.device then
-		return
-	end
-
-	local tc = jsonc.parse(execute("tc -j qdisc show dev " .. qdisc.device))
-
-	if tc[1].kind ~= "cake" or not tonumber(tc[1].options.bandwidth) or not tc[1].handle then
-		qdisc.bandwidth = nil
-		qdisc.handle = nil
-		qdisc.kind = nil
-		return
-	end
-
-	qdisc.bandwidth = tc[1].options.bandwidth * 0.008
-	qdisc.handle = tc[1].handle
-	qdisc.kind = tc[1].kind
-end
-
-local function updateQdisc(qdisc)
-	if not qdisc.change or qdisc.change == 0 then
-		return
-	end
-
-	local bps = math.floor((qdisc.bandwidth + qdisc.change) * 125)
-	if
-		os.execute(
-			"tc qdisc change"
-				.. " handle "
-				.. qdisc.handle
-				.. " dev "
-				.. qdisc.device
-				.. " "
-				.. qdisc.kind
-				.. " bandwidth "
-				.. bps
-				.. "bps"
-		) == 0
-	then
-		qdisc.bandwidth = bps * 0.008
-	end
 end
 
 local function adjustmentLog()
@@ -339,10 +292,8 @@ local function adjustmentLog()
 		ingressBandwidth = ingress.bandwidth
 	end
 	if ingress.stableComparision then
-		ingressStableComparision = ingress.stableComparision
-	end
-	if ingress.decreaseChance then
 		ingressDecreaseChance = ingress.decreaseChance
+		ingressStableComparision = ingress.stableComparision
 	end
 
 	local egressUtilisation = egress.utilisation
@@ -354,8 +305,6 @@ local function adjustmentLog()
 	end
 	if egress.stableComparision then
 		egressStableComparision = egress.stableComparision
-	end
-	if egress.decreaseChance then
 		egressDecreaseChance = egress.decreaseChance
 	end
 
@@ -410,6 +359,49 @@ local function adjustmentLog()
 	if logFile then
 		os.execute("mkdir -p $(dirname '" .. logFile .. "')")
 		writeFile(logFile, logLine .. "\n", "a")
+	end
+end
+
+local function getQdisc(qdisc)
+	if not qdisc.device then
+		return
+	end
+
+	local tc = jsonc.parse(execute("tc -j qdisc show dev " .. qdisc.device))
+
+	if tc[1].kind ~= "cake" or not tonumber(tc[1].options.bandwidth) or not tc[1].handle then
+		qdisc.bandwidth = nil
+		qdisc.handle = nil
+		qdisc.kind = nil
+		return
+	end
+
+	qdisc.bandwidth = tc[1].options.bandwidth * 0.008
+	qdisc.handle = tc[1].handle
+	qdisc.kind = tc[1].kind
+end
+
+local function updateQdisc(qdisc)
+	if not qdisc.change or qdisc.change == 0 then
+		return
+	end
+
+	local bps = math.floor((qdisc.bandwidth + qdisc.change) * 125)
+	if
+		os.execute(
+			"tc qdisc change"
+				.. " handle "
+				.. qdisc.handle
+				.. " dev "
+				.. qdisc.device
+				.. " "
+				.. qdisc.kind
+				.. " bandwidth "
+				.. bps
+				.. "bps"
+		) == 0
+	then
+		qdisc.bandwidth = bps * 0.008
 	end
 end
 
@@ -515,21 +507,24 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assured = qdisc.rate * qdisc.assuredTarget
 	elseif qdisc.decreaseChance and qdisc.decreaseChance > 0.01 then
 		updateSample(qdisc.assuredSample, qdisc.rate * qdisc.assuredTarget, stablePeriod)
-		qdisc.assured = math.min(unpack(qdisc.assuredSample)) * 0.9 + mean(qdisc.assuredSample) * 0.1
+		qdisc.assured = mean(qdisc.assuredSample)
 	else
 		qdisc.assured = qdisc.assured * assuredPersistance + qdisc.rate * (1 - assuredPersistance)
 	end
 
-	if not qdisc.decreaseChance or qdisc.decreaseChance < 0.01 then
+	if qdisc.assured > qdisc.stable and (not qdisc.decreaseChance or qdisc.decreaseChance < 0.01) then
 		qdisc.stable = qdisc.assured
+	else
+		local stableResistance = 0.99 ^ interval
+		qdisc.stable = qdisc.stable * stableResistance + qdisc.assured * (1 - stableResistance)
 	end
 end
 
 local function calculateDecrease(qdisc)
-	if ping.current < ping.limit * 5 then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 5)) ^ 2
+	if ping.current < ping.limit * 4 then
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 4)) ^ 2
 	end
-	
+
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
 
 	if qdisc.change > -0.008 then
@@ -609,7 +604,7 @@ local function statisticsInterval()
 	local rxBytes = tonumber(readFile("/sys/class/net/" .. device .. "/statistics/rx_bytes"))
 	intervalEpoch = epoch()
 
-	if not txBytes or not rxBytes or not intervalEpoch then
+	if not txBytes or not rxBytes then
 		log("LOG_ERR", "Cannot read tx/rx rates for " .. interface .. " (" .. device .. ")")
 		exit()
 	end
@@ -758,7 +753,6 @@ local function initialise()
 		"ipv6.msftconnecttest.com",
 		"captive.apple.com",
 	}
-
 	egress = {}
 	ingress = {}
 	dscp = "CS6"
@@ -788,7 +782,6 @@ local function initialise()
 	if config.iptype and config.iptype ~= "ipv4" and config.iptype ~= "ipv6" and config.iptype ~= "ipv4v6" then
 		log("LOG_ERR", "Invalid iptype config value specified for " .. interface)
 		os.exit()
-		config.iptype = nil
 	end
 
 	if config.iptype then
@@ -874,7 +867,7 @@ local function initialise()
 
 	pingIncreaseResistance = 0.98
 	pingDecreaseResistance = 0.05
-	assuredPersistance = 0.98
+	assuredPersistance = 0.9
 	stableSeconds = 2
 	egress.assuredTarget = 0.9
 	ingress.assuredTarget = 0.9
@@ -886,13 +879,13 @@ local function initialise()
 		ingress.device = config.ingressDevice
 	end
 
-	if config.stablePersistence then
-		config.stablePersistence = tonumber(config.stablePersistence)
-		if not config.stablePersistence or config.stablePersistence <= 0 or config.stablePersistence > 1 then
-			log("LOG_ERR", "Invalid stablePersistence config value specified for " .. interface)
+	if config.assuredPersistence then
+		config.assuredPersistence = tonumber(config.assuredPersistence)
+		if not config.assuredPersistence or config.assuredPersistence <= 0 or config.assuredPersistence > 1 then
+			log("LOG_ERR", "Invalid assuredPersistence config value specified for " .. interface)
 			os.exit()
 		else
-			stablePersistence = config.stablePersistence
+			assuredPersistence = config.assuredPersistence
 		end
 	end
 
