@@ -507,8 +507,10 @@ local function calculateAssuredRate(qdisc)
 	if not qdisc.assuredSample or ping.current < ping.limit then
 		qdisc.assuredSample = {}
 	end
-	if not qdisc.assured or ping.current < ping.limit and qdisc.rate * qdisc.assuredTarget > qdisc.assured then
+	if not qdisc.assured or qdisc.rate * qdisc.assuredTarget > qdisc.assured and ping.current < ping.limit and ping.current > ping.target then
 		qdisc.assured = qdisc.rate * qdisc.assuredTarget
+	elseif ping.current < ping.limit and qdisc.rate > qdisc.assured then
+		qdisc.assured = qdisc.rate
 	elseif qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
 		updateSample(qdisc.assuredSample, qdisc.rate * qdisc.assuredTarget, assuredPeriod)
 		qdisc.assured = mean(qdisc.assuredSample)
@@ -528,8 +530,8 @@ local function calculateAssuredRate(qdisc)
 end
 
 local function calculateDecrease(qdisc)
-	if ping.current < ping.limit * 4 then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 4)) ^ 1.3
+	if ping.current < ping.limit * 2 then
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 2)) ^ 3
 	end
 
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
