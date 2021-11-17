@@ -64,9 +64,9 @@ The service configuration is controlled through the config file:
 
 A valid WAN interface name should be specified for each wanmonitor config section.
 
-It is recommended that the ingress and egress assured parateters are set in the 0.7-0.8 range for a LTE link, please start with the defaults (exact values will depend on your setup).
+It is recommended that the ingress and egress assured parateters are set in the 0.8-0.9 range for an LTE link, please start with the defaults (exact values will depend on your setup).
 
-**The values do not determine the link's maximum bandwith, they are used in the metric comparisons to account for rate jitter.**
+**The values do not determine the link's maximum bandwith, they are used to compensate for rate jitter.**
 
 Note that these should be configured to match the troughs of a saturated line rate as shown below:
 
@@ -77,8 +77,8 @@ Option | Type | Description | Examples | Default
 enabled | boolean | Enable monitoring for an interface | 0 or 1 | 0 (disabled)
 reconnect | boolean | Enable automatic reconnect of an interface that loses connectivity (optional) | 0 or 1 | 0 (disabled)
 autorate | boolean | Enable automatic rate adjustment for interface SQM cake qdiscs (optional) | 0 or 1 | 0 (disabled)
-egressAssured | decimal | Assured rate percentage for the interface egress in decimal form 0 to 1 (optional) | 0.7| 0.7 (70%)
-ingressAssured | decimal | Assured rate percentage for the interface ingress in decimal form 0 to 1 (optional) | 0.7 | 0.7 (70%)
+egressAssured | decimal | Assured rate percentage for the interface egress in decimal form 0 to 1 (optional) | 0.9| 0.9 (90%)
+ingressAssured | decimal | Assured rate percentage for the interface ingress in decimal form 0 to 1 (optional) | 0.9 | 0.9 (90%)
 ingressDevice | string | Used to specify an alternative ingress device such as a veth or lan interface (optional) | br-lan |
 interval | decimal | Specifies the ping test interval in seconds (optional) | 0.5 | 0.5 seconds
 rtt | decimal | Specifies the link's typical uncongested ping milliseconds (optional) | 50 | 50
