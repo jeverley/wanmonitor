@@ -334,7 +334,10 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", ingress.stable)
 		.. ";	"
-		.. string.format("%.2f", egress.stable)
+		.. string.format(
+			"%.2f",
+			egress.stable
+		)
 		.. ";	"
 		.. string.format(
 			"%.2f",
@@ -468,7 +471,7 @@ local function calculateDecreaseChance(qdisc, compared)
 	qdisc.stableComparision = (qdisc.rate - qdisc.stable) / qdisc.stable
 	qdisc.decreaseChanceReducer = 1
 
-	if qdisc.utilisation > 0.98 then
+	if qdisc.utilisation > 1.111111 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
 
@@ -487,17 +490,21 @@ local function adjustDecreaseChance(qdisc, compared)
 	local amplify = 6
 	if not compared.decreaseChance then
 		if qdisc.decreaseChance > 1 then
+			print("1 " .. qdisc.decreaseChance)
 			qdisc.decreaseChance = 1
 		end
 	elseif qdisc.decreaseChance < compared.decreaseChance then
 		if compared.decreaseChance > 1 then
+			print("2 " .. qdisc.decreaseChance .. " " .. compared.decreaseChance)
 			qdisc.decreaseChance = qdisc.decreaseChance / compared.decreaseChance
 			qdisc.decreaseChance = qdisc.decreaseChance * qdisc.decreaseChance ^ amplify
 			compared.decreaseChance = 1
 		else
+			print("3 " .. qdisc.decreaseChance .. " " .. compared.decreaseChance)
 			qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
 		end
 	elseif qdisc.decreaseChance > 1 then
+		print("4 " .. qdisc.decreaseChance .. " " .. compared.decreaseChance)
 		qdisc.decreaseChance = 1
 		compared.decreaseChance = compared.decreaseChance / qdisc.decreaseChance
 	end
@@ -507,7 +514,12 @@ local function calculateAssuredRate(qdisc)
 	if not qdisc.assuredSample or ping.current < ping.limit then
 		qdisc.assuredSample = {}
 	end
-	if not qdisc.assured or qdisc.rate * qdisc.assuredTarget > qdisc.assured and ping.current < ping.limit and ping.current > ping.target then
+	if
+		not qdisc.assured
+		or ping.current < ping.limit
+			and ping.current > ping.target
+			and qdisc.rate * qdisc.assuredTarget > qdisc.assured
+	then
 		qdisc.assured = qdisc.rate * qdisc.assuredTarget
 	elseif ping.current < ping.limit and qdisc.rate > qdisc.assured then
 		qdisc.assured = qdisc.rate
@@ -518,20 +530,17 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assured = qdisc.assured * assuredPersistance + qdisc.rate * qdisc.assuredTarget * (1 - assuredPersistance)
 	end
 
-	if qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
-		if qdisc.stable < qdisc.assured then
-			qdisc.stable = qdisc.stable * stableIncreaseResistance + qdisc.assured * (1 - stableIncreaseResistance)
-		else
-			qdisc.stable = qdisc.stable * stableDecreaseResistance + qdisc.assured * (1 - stableDecreaseResistance)
-		end
-	else
+	if qdisc.assured < qdisc.stable or not qdisc.decreaseChance or qdisc.decreaseChance < 0.01 then
 		qdisc.stable = qdisc.assured
+	else
+		qdisc.stable = qdisc.stable * stableIncreaseResistance + qdisc.assured * (1 - stableIncreaseResistance)
 	end
 end
 
 local function calculateDecrease(qdisc)
-	if ping.current < ping.limit * 2 then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 2)) ^ 3
+	if ping.current < ping.limit * 4 then
+		print("5 " .. qdisc.decreaseChance)
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 4)) ^ 1.2
 	end
 
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
@@ -544,7 +553,7 @@ end
 local function calculateIncrease(qdisc)
 	local targetMultiplier = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum) / qdisc.bandwidth
 	if targetMultiplier < 1 then
-		targetMultiplier = targetMultiplier ^ 20
+		targetMultiplier = targetMultiplier ^ 10
 	end
 	qdisc.change = qdisc.bandwidth * 0.05 * targetMultiplier
 
@@ -874,16 +883,15 @@ local function initialise()
 		return
 	end
 
+	assuredPersistance = 0.7
 	pingIncreaseResistance = 0.99
 	pingDecreaseResistance = 0.25
-	assuredPersistance = 0.7
 	stableIncreaseResistance = 0.999
-	stableDecreaseResistance = 0.9
 	stableSeconds = 2
 	egress.assuredTarget = 0.9
 	ingress.assuredTarget = 0.9
-	egress.device = device
 
+	egress.device = device
 	if not config.ingressDevice or device == config.ingressDevice then
 		ingress.device = "ifb4" .. string.sub(device, 1, 11)
 	else
@@ -951,11 +959,10 @@ local function initialise()
 	end
 
 	assuredPeriod = math.ceil(1 / interval)
+	assuredPersistance = assuredPersistance ^ interval
 	pingIncreaseResistance = pingIncreaseResistance ^ interval
 	pingDecreaseResistance = pingDecreaseResistance ^ interval
-	assuredPersistance = assuredPersistance ^ interval
 	stableIncreaseResistance = stableIncreaseResistance ^ interval
-	stableDecreaseResistance = stableDecreaseResistance ^ interval
 end
 
 local function daemonise()
