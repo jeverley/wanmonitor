@@ -529,7 +529,7 @@ end
 
 local function calculateDecrease(qdisc)
 	if ping.current < ping.limit * 4 then
-		qdisc.decreaseChance = qdisc.decreaseChance * ping.current / (ping.limit * 4)
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 4)) ^ 1.3
 	end
 
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
