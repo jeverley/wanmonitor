@@ -332,6 +332,10 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.assured)
 		.. ";	"
+		.. string.format("%.2f", ingress.stable)
+		.. ";	"
+		.. string.format("%.2f", egress.stable)
+		.. ";	"
 		.. string.format(
 			"%.2f",
 			ingressStableComparision
@@ -464,11 +468,11 @@ local function calculateDecreaseChance(qdisc, compared)
 	qdisc.stableComparision = (qdisc.rate - qdisc.stable) / qdisc.stable
 	qdisc.decreaseChanceReducer = 1
 
-	if qdisc.utilisation > 0.98 and qdisc.utilisation < 1.005 then
+	if qdisc.utilisation > 0.98 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.5
 	end
 
-	if compared.utilisation and compared.utilisation > 0.98 then
+	if compared.utilisation and compared.utilisation > 0.1 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.7 / compared.utilisation
 	end
 
@@ -513,7 +517,11 @@ local function calculateAssuredRate(qdisc)
 	end
 
 	if qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
-		qdisc.stable = qdisc.stable * stablePersistence + qdisc.assured * (1 - stablePersistence)
+		if qdisc.stable < qdisc.assured then
+			qdisc.stable = qdisc.stable * stableIncreaseResistance + qdisc.assured * (1 - stableIncreaseResistance)
+		else
+			qdisc.stable = qdisc.stable * stableDecreaseResistance + qdisc.assured * (1 - stableDecreaseResistance)
+		end
 	else
 		qdisc.stable = qdisc.assured
 	end
@@ -864,10 +872,11 @@ local function initialise()
 		return
 	end
 
-	pingIncreaseResistance = 0.995
-	pingDecreaseResistance = 0.15
-	assuredPersistance = 0.9
-	stablePersistence = 0.999
+	pingIncreaseResistance = 0.99
+	pingDecreaseResistance = 0.25
+	assuredPersistance = 0.8
+	stableIncreaseResistance = 0.999
+	stableDecreaseResistance = 0.9
 	stableSeconds = 2
 	egress.assuredTarget = 0.9
 	ingress.assuredTarget = 0.9
@@ -943,7 +952,8 @@ local function initialise()
 	pingIncreaseResistance = pingIncreaseResistance ^ interval
 	pingDecreaseResistance = pingDecreaseResistance ^ interval
 	assuredPersistance = assuredPersistance ^ interval
-	stablePersistence = stablePersistence ^ interval
+	stableIncreaseResistance = stableIncreaseResistance ^ interval
+	stableDecreaseResistance = stableDecreaseResistance ^ interval
 end
 
 local function daemonise()
