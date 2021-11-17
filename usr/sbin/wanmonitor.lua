@@ -32,7 +32,7 @@ local pingIncreaseResistance
 local pingDecreaseResistance
 local assuredPersistance
 local stableSeconds
-local stablePeriod
+local assuredPeriod
 local reconnect
 local autorate
 local rtt
@@ -480,7 +480,7 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
-	local amplify = 7
+	local amplify = 6
 	if not compared.decreaseChance then
 		if qdisc.decreaseChance > 1 then
 			qdisc.decreaseChance = 1
@@ -503,26 +503,25 @@ local function calculateAssuredRate(qdisc)
 	if not qdisc.assuredSample or ping.current < ping.limit then
 		qdisc.assuredSample = {}
 	end
-	if not qdisc.assured or ping.current < ping.target and qdisc.rate * qdisc.assuredTarget > qdisc.assured then
+	if not qdisc.assured or ping.current < ping.limit and qdisc.rate * qdisc.assuredTarget > qdisc.assured then
 		qdisc.assured = qdisc.rate * qdisc.assuredTarget
-	elseif qdisc.decreaseChance and qdisc.decreaseChance > 0.01 then
-		updateSample(qdisc.assuredSample, qdisc.rate * qdisc.assuredTarget, stablePeriod)
+	elseif qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
+		updateSample(qdisc.assuredSample, qdisc.rate * qdisc.assuredTarget, assuredPeriod)
 		qdisc.assured = mean(qdisc.assuredSample)
 	else
-		qdisc.assured = qdisc.assured * assuredPersistance + qdisc.rate * (1 - assuredPersistance)
+		qdisc.assured = qdisc.assured * assuredPersistance + qdisc.rate * qdisc.assuredTarget * (1 - assuredPersistance)
 	end
 
-	if qdisc.assured > qdisc.stable and (not qdisc.decreaseChance or qdisc.decreaseChance < 0.01) then
-		qdisc.stable = qdisc.assured
+	if qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
+		qdisc.stable = qdisc.stable * stablePersistence + qdisc.assured * (1 - stablePersistence)
 	else
-		local stableResistance = 0.99 ^ interval
-		qdisc.stable = qdisc.stable * stableResistance + qdisc.assured * (1 - stableResistance)
+		qdisc.stable = qdisc.assured
 	end
 end
 
 local function calculateDecrease(qdisc)
 	if ping.current < ping.limit * 4 then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 4)) ^ 2
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 4)) ^ 1.5
 	end
 
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
@@ -865,9 +864,10 @@ local function initialise()
 		return
 	end
 
-	pingIncreaseResistance = 0.98
-	pingDecreaseResistance = 0.05
+	pingIncreaseResistance = 0.995
+	pingDecreaseResistance = 0.1
 	assuredPersistance = 0.9
+	stablePersistence = 0.999
 	stableSeconds = 2
 	egress.assuredTarget = 0.9
 	ingress.assuredTarget = 0.9
@@ -939,10 +939,11 @@ local function initialise()
 		end
 	end
 
-	stablePeriod = stableSeconds / interval
+	assuredPeriod = math.ceil(1 / interval)
 	pingIncreaseResistance = pingIncreaseResistance ^ interval
 	pingDecreaseResistance = pingDecreaseResistance ^ interval
 	assuredPersistance = assuredPersistance ^ interval
+	stablePersistence = stablePersistence ^ interval
 end
 
 local function daemonise()
