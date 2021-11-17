@@ -490,39 +490,40 @@ local function adjustDecreaseChance(qdisc, compared)
 	local amplify = 6
 	if not compared.decreaseChance then
 		if qdisc.decreaseChance > 1 then
-			print("1 " .. qdisc.decreaseChance)
 			qdisc.decreaseChance = 1
 		end
 	elseif qdisc.decreaseChance < compared.decreaseChance then
 		if compared.decreaseChance > 1 then
-			print("2 " .. qdisc.decreaseChance .. " " .. compared.decreaseChance)
 			qdisc.decreaseChance = qdisc.decreaseChance / compared.decreaseChance
 			qdisc.decreaseChance = qdisc.decreaseChance * qdisc.decreaseChance ^ amplify
 			compared.decreaseChance = 1
 		else
-			print("3 " .. qdisc.decreaseChance .. " " .. compared.decreaseChance)
 			qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
 		end
 	elseif qdisc.decreaseChance > 1 then
-		print("4 " .. qdisc.decreaseChance .. " " .. compared.decreaseChance)
-		qdisc.decreaseChance = 1
 		compared.decreaseChance = compared.decreaseChance / qdisc.decreaseChance
+		qdisc.decreaseChance = 1
 	end
 end
 
 local function calculateAssuredRate(qdisc)
-	if not qdisc.assuredSample or ping.current < ping.limit then
+	if not qdisc.assuredSample then
 		qdisc.assuredSample = {}
 	end
+
 	if
 		not qdisc.assured
-		or ping.current < ping.limit
-			and ping.current > ping.target
-			and qdisc.rate * qdisc.assuredTarget > qdisc.assured
+		or qdisc.rate * qdisc.assuredTarget > qdisc.assured
+			and (not qdisc.decreaseChance or qdisc.decreaseChance < 0.01 or ping.current < ping.limit)
 	then
 		qdisc.assured = qdisc.rate * qdisc.assuredTarget
-	elseif ping.current < ping.limit and qdisc.rate > qdisc.assured then
-		qdisc.assured = qdisc.rate
+	elseif ping.latent == interval then
+		qdisc.assuredSample = {}
+		if qdisc.rate * qdisc.assuredTarget > qdisc.assured then
+			qdisc.assured = qdisc.rate * qdisc.assuredTarget
+		else
+			qdisc.assured = qdisc.rate * qdisc.assuredTarget * 0.5 + qdisc.assured * 0.5
+		end
 	elseif qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
 		updateSample(qdisc.assuredSample, qdisc.rate * qdisc.assuredTarget, assuredPeriod)
 		qdisc.assured = mean(qdisc.assuredSample)
@@ -539,8 +540,7 @@ end
 
 local function calculateDecrease(qdisc)
 	if ping.current < ping.limit * 4 then
-		print("5 " .. qdisc.decreaseChance)
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 4)) ^ 1.2
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 4)) ^ 2.5
 	end
 
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
@@ -884,7 +884,7 @@ local function initialise()
 	end
 
 	assuredPersistance = 0.7
-	pingIncreaseResistance = 0.99
+	pingIncreaseResistance = 0.995
 	pingDecreaseResistance = 0.25
 	stableIncreaseResistance = 0.999
 	stableSeconds = 2
