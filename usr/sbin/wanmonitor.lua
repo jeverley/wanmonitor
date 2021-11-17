@@ -865,7 +865,7 @@ local function initialise()
 	end
 
 	pingIncreaseResistance = 0.995
-	pingDecreaseResistance = 0.1
+	pingDecreaseResistance = 0.15
 	assuredPersistance = 0.9
 	stablePersistence = 0.999
 	stableSeconds = 2
