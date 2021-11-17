@@ -458,18 +458,12 @@ local function updateRateStatistics(qdisc)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
-	if not qdisc.bandwidth or ping.current < ping.limit then
-		qdisc.stableComparision = nil
-		qdisc.decreaseChance = nil
-		qdisc.decreaseChanceReducer = nil
-		return
-	end
-
 	if not qdisc.stable then
 		qdisc.stable = 1
 	end
 
-	if qdisc.rate <= qdisc.stable then
+	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
+		qdisc.stableComparision = nil
 		qdisc.decreaseChance = nil
 		qdisc.decreaseChanceReducer = nil
 		return
@@ -503,15 +497,13 @@ local function adjustDecreaseChance(qdisc, compared)
 		if compared.decreaseChance > 1 then
 			qdisc.decreaseChance = qdisc.decreaseChance / compared.decreaseChance
 			qdisc.decreaseChance = qdisc.decreaseChance * qdisc.decreaseChance ^ amplify
+			compared.decreaseChance = 1
 		else
 			qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
 		end
 	elseif qdisc.decreaseChance > 1 then
 		qdisc.decreaseChance = 1
-	end
-
-	if ping.current < ping.limit * 5 then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 5)) ^ 2
+		compared.decreaseChance = compared.decreaseChance / qdisc.decreaseChance
 	end
 end
 
@@ -523,7 +515,7 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assured = qdisc.rate * qdisc.assuredTarget
 	elseif qdisc.decreaseChance and qdisc.decreaseChance > 0.01 then
 		updateSample(qdisc.assuredSample, qdisc.rate * qdisc.assuredTarget, stablePeriod)
-		qdisc.assured = math.min(unpack(qdisc.assuredSample)) * 0.8 + mean(qdisc.assuredSample) * 0.2
+		qdisc.assured = math.min(unpack(qdisc.assuredSample)) * 0.9 + mean(qdisc.assuredSample) * 0.1
 	else
 		qdisc.assured = qdisc.assured * assuredPersistance + qdisc.rate * (1 - assuredPersistance)
 	end
@@ -534,6 +526,10 @@ local function calculateAssuredRate(qdisc)
 end
 
 local function calculateDecrease(qdisc)
+	if ping.current < ping.limit * 5 then
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 5)) ^ 2
+	end
+	
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
 
 	if qdisc.change > -0.008 then
