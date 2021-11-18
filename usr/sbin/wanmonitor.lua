@@ -578,7 +578,7 @@ local function calculateChange(qdisc)
 	if
 		ping.current < ping.limit
 		and ping.clear >= stableSeconds
-		and (qdisc.assured > qdisc.bandwidth * 0.95 or math.random(1, 10) <= 5 * interval)
+		and (qdisc.assured > qdisc.bandwidth * 0.95 or math.random(1, 100) <= 50 * interval)
 	then
 		calculateIncrease(qdisc)
 		return
