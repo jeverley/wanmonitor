@@ -3,9 +3,9 @@ Copyright 2021 Jack Everley
 Lua script for monitoring an OpenWrt WAN interface and auto-adjusting SQM cake egress and ingress bandwidth
 Command line arguments:
 	required	-i	(--interface)	Specifies the wan interface to monitor
-	required	-c	(--console)	Run attached to an interactive shell
-	required	-v	(--verbose)	Print all intervals
-	required	-l	(--log /path)	Write intervals to log file
+	optional	-c	(--console)	Run attached to an interactive shell
+	optional	-v	(--verbose)	Print all intervals
+	optional	-l	(--log /path)	Write intervals to log file
 ]]
 
 local jsonc = require("luci.jsonc")
