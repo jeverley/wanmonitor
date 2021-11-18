@@ -545,12 +545,11 @@ end
 local function calculateDecrease(qdisc)
 	local pingReducer = 1
 	if ping.current < ping.ceiling then
-		pingReducer = (ping.current / ping.ceiling) ^ 5
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 5
+	else
+		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	end
-	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured))
-		* qdisc.decreaseChance
-		* pingReducer
-		* -1
+	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
 
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
