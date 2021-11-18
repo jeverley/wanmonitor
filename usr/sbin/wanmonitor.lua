@@ -72,9 +72,9 @@ local function exit()
 	os.exit()
 end
 
-local function resetMssClamp()
-	egress.mssClamp = nil
-	ingress.mssClamp = nil
+local function resetMssJitterFix()
+	egress.mssJitterFix = nil
+	ingress.mssJitterFix = nil
 	if childPid then
 		signal.kill(childPid, signal.SIGKILL)
 		pingStatus = 3
@@ -103,6 +103,22 @@ local function updateSample(sample, observation, period)
 	while #sample > period do
 		table.remove(sample, 1)
 	end
+end
+
+local function streamingMedian(persist, observation)
+	if not persist.median or not persist.step then
+		persist.median = observation
+		persist.step = math.max(math.abs(observation / 2), 1)
+	end
+	if persist.median > observation then
+		persist.median = persist.median - persist.step
+	elseif persist.median < observation then
+		persist.median = persist.median + persist.step
+	end
+	if math.abs(observation - persist.median) < persist.step then
+		persist.step = persist.step / 2
+	end
+	return persist.median
 end
 
 local function readFile(file)
@@ -240,14 +256,14 @@ local function mssClamp(qdisc)
 	local jitterClampArgs =
 		'-p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "Clamp MSS to reduce jitter" -j TCPMSS --set-mss 540'
 
-	if qdisc.bandwidth < 3000 and qdisc.mssClamp ~= true then
+	if qdisc.bandwidth < 3000 and qdisc.mssJitterFix ~= true then
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
 		os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
 		os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
 		log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to 540")
-		qdisc.mssClamp = true
-	elseif qdisc.bandwidth >= 3000 and qdisc.mssClamp ~= false then
+		qdisc.mssJitterFix = true
+	elseif qdisc.bandwidth >= 3000 and qdisc.mssJitterFix ~= false then
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
 		local wan = firewallZoneConfig("wan")
@@ -256,7 +272,7 @@ local function mssClamp(qdisc)
 			os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
 			log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to PMTU")
 		end
-		qdisc.mssClamp = false
+		qdisc.mssJitterFix = false
 	end
 end
 
@@ -281,7 +297,7 @@ local function adjustmentLog()
 	if
 		not (ingress.change and ingress.change ~= 0)
 		and not (egress.change and egress.change ~= 0)
-		and not (ping.current and ping.target and ping.current > ping.target)
+		and not (ping.current and ping.limit and ping.current > ping.limit)
 		and not verbose
 	then
 		return
@@ -334,13 +350,6 @@ local function adjustmentLog()
 		.. string.format("%.2f", ingress.assured)
 		.. ";	"
 		.. string.format("%.2f", egress.assured)
-		.. ";	"
-		.. string.format("%.2f", ingress.stable)
-		.. ";	"
-		.. string.format(
-			"%.2f",
-			egress.stable
-		)
 		.. ";	"
 		.. string.format(
 			"%.2f",
@@ -416,35 +425,21 @@ local function updateQdisc(qdisc)
 end
 
 local function updatePingStatistics()
-	if not ping.baseline then
+	if not ping.medianPersist then
 		ping.clear = 0
-		ping.latent = 0
-		ping.baseline = rtt
+		ping.medianPersist = {}
+		streamingMedian(ping.medianPersist, rtt)
 	end
-
-	if ping.current > ping.baseline then
-		ping.baseline = ping.baseline * pingIncreaseResistance + ping.current * (1 - pingIncreaseResistance)
-	else
-		ping.baseline = ping.baseline * pingDecreaseResistance + ping.current * (1 - pingDecreaseResistance)
-	end
-
-	ping.limit = ping.baseline * 2
-	ping.target = ping.baseline * 1.5
+	ping.baseline = streamingMedian(ping.medianPersist, ping.current)
+	ping.limit = ping.baseline + 5
+	ping.ceiling = ping.limit + 50
 
 	if ping.current > ping.limit then
 		ping.clear = 0
-		ping.latent = ping.latent + interval
-		return
-	end
-
-	if ping.current > ping.target then
-		ping.clear = 0
-		ping.latent = 0
 		return
 	end
 
 	ping.clear = ping.clear + interval
-	ping.latent = 0
 end
 
 local function updateRateStatistics(qdisc)
@@ -537,8 +532,8 @@ end
 
 local function calculateDecrease(qdisc)
 	local pingReducer = 1
-	if ping.current < ping.limit * 4 then
-		pingReducer = (ping.current / (ping.limit * 4)) ^ 2
+	if ping.current < ping.ceiling then
+		pingReducer = (ping.current / ping.ceiling) ^ 5
 	end
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured))
 		* qdisc.decreaseChance
@@ -574,7 +569,7 @@ local function calculateChange(qdisc)
 	end
 
 	if
-		ping.current < ping.target
+		ping.current < ping.limit
 		and ping.clear >= stableSeconds
 		and (qdisc.assured > qdisc.bandwidth * 0.95 or math.random(1, 10) <= 5 * interval)
 	then
@@ -883,7 +878,7 @@ local function initialise()
 		return
 	end
 
-	assuredPersistence = 0.8
+	assuredPersistence = 0.9
 	pingIncreaseResistance = 0.995
 	pingDecreaseResistance = 0.4
 	stableIncreaseResistance = 0.999
@@ -979,7 +974,7 @@ local function main()
 	signal.signal(signal.SIGHUP, exit)
 	signal.signal(signal.SIGINT, exit)
 	signal.signal(signal.SIGTERM, exit)
-	signal.signal(signal.SIGUSR1, resetMssClamp)
+	signal.signal(signal.SIGUSR1, resetMssJitterFix)
 
 	if not console then
 		daemonise()
