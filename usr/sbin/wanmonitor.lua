@@ -502,9 +502,11 @@ local function adjustDecreaseChance(qdisc, compared)
 end
 
 local function calculateAssuredRate(qdisc)
+	local firstLatent
 	if qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
 		if not qdisc.latent then
 			qdisc.assuredSample = {}
+			firstLatent = true
 		end
 		qdisc.latent = true
 	elseif qdisc.latent then
@@ -515,7 +517,7 @@ local function calculateAssuredRate(qdisc)
 	end
 
 	local assured = qdisc.rate
-	if ping.current > ping.limit and (not qdisc.assuredSample or qdisc.assuredSample[1]) then
+	if ping.current > ping.limit and qdisc.latent ~= false then
 		assured = qdisc.rate * qdisc.assuredTarget
 	end
 
@@ -526,6 +528,9 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assured = assured
 	else
 		qdisc.assured = qdisc.assured * assuredPersistence + assured * (1 - assuredPersistence)
+	end
+	if firstLatent then
+		qdisc.assured = qdisc.rate
 	end
 
 	if qdisc.assured < qdisc.stable or qdisc.latent == false then
