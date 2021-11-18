@@ -429,7 +429,7 @@ local function updatePingStatistics()
 	end
 
 	ping.limit = ping.baseline * 2
-	ping.target = ping.baseline * 1.4
+	ping.target = ping.baseline * 1.5
 
 	if ping.current > ping.limit then
 		ping.clear = 0
