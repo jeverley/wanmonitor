@@ -425,7 +425,7 @@ local function updatePingStatistics()
 		ping.baseline = ping.baseline * pingDecreaseResistance + ping.current * (1 - pingDecreaseResistance)
 	end
 
-	ping.limit = ping.baseline * 1.8
+	ping.limit = ping.baseline * 1.7
 	ping.target = ping.baseline * 1.4
 
 	if ping.current > ping.limit then
@@ -503,27 +503,27 @@ local function adjustDecreaseChance(qdisc, compared)
 end
 
 local function calculateAssuredRate(qdisc)
-	if not qdisc.latent then
-		qdisc.latent = 0
-	end
 	if qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
-		qdisc.latent = qdisc.latent + interval
+		if not qdisc.latent then
+			qdisc.assuredSample = {}
+		end
+		qdisc.latent = true
+	elseif qdisc.latent then
+		qdisc.latent = nil
 	else
-		qdisc.latent = 0
+		qdisc.latent = false
 	end
 
-	if not qdisc.assured or qdisc.latent <= interval and qdisc.rate * qdisc.assuredTarget > qdisc.assured then
-		qdisc.assuredSample = {}
-		qdisc.assured = qdisc.rate * qdisc.assuredTarget
-		table.insert(qdisc.assuredSample, qdisc.assured)
-	elseif qdisc.latent > interval then
+	if qdisc.latent ~= false then
 		updateSample(qdisc.assuredSample, qdisc.rate * qdisc.assuredTarget, assuredPeriod)
 		qdisc.assured = mean(qdisc.assuredSample)
+	elseif not qdisc.assured or qdisc.rate * qdisc.assuredTarget > qdisc.assured then
+		qdisc.assured = qdisc.rate * qdisc.assuredTarget
 	else
 		qdisc.assured = qdisc.assured * assuredPersistance + qdisc.rate * qdisc.assuredTarget * (1 - assuredPersistance)
 	end
 
-	if qdisc.assured < qdisc.stable or qdisc.latent == 0 then
+	if qdisc.assured < qdisc.stable or not qdisc.latent then
 		qdisc.stable = qdisc.assured
 	else
 		qdisc.stable = qdisc.stable * stableIncreaseResistance + qdisc.assured * (1 - stableIncreaseResistance)
@@ -950,7 +950,7 @@ local function initialise()
 		end
 	end
 
-	assuredPeriod = math.ceil(1 / interval)
+	assuredPeriod = math.ceil(1.5 / interval)
 	assuredPersistance = assuredPersistance ^ interval
 	pingIncreaseResistance = pingIncreaseResistance ^ interval
 	pingDecreaseResistance = pingDecreaseResistance ^ interval
