@@ -1,8 +1,11 @@
 --[[
 Copyright 2021 Jack Everley
-Lua script for monitoring a wan interface and auto-adjusting its qdiscs' bandwidth for SQM
+Lua script for monitoring an OpenWrt WAN interface and auto-adjusting SQM cake egress and ingress bandwidth
 Command line arguments:
-	required	-i	(--interface)	Used to specify the wan interface to monitor
+	required	-i	(--interface)	Specifies the wan interface to monitor
+	required	-c	(--console)	Run attached to an interactive shell
+	required	-v	(--verbose)	Print all intervals
+	required	-l	(--log /path)	Write intervals to log file
 ]]
 
 local jsonc = require("luci.jsonc")
@@ -531,11 +534,14 @@ local function calculateAssuredRate(qdisc)
 end
 
 local function calculateDecrease(qdisc)
+	local pingReducer = 1
 	if ping.current < ping.limit * 4 then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / (ping.limit * 4)) ^ 2
+		pingReducer = (ping.current / (ping.limit * 4)) ^ 2
 	end
-
-	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
+	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured))
+		* qdisc.decreaseChance
+		* pingReducer
+		* -1
 
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
