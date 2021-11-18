@@ -38,7 +38,7 @@ local pingDecreaseResistance
 local pingIncreaseResistance
 local reconnect
 local rtt
-local stableSeconds
+local stableTime
 local verbose
 
 local hostCount
@@ -532,7 +532,7 @@ local function calculateAssuredRate(qdisc)
 	elseif not qdisc.assured or assured > qdisc.assured then
 		qdisc.assured = assured
 	else
-		qdisc.assured = qdisc.assured * assuredPersistence + assured * (1 - assuredPersistence)
+		qdisc.assured = assuredPersistence * qdisc.assured + (1 - assuredPersistence) * assured
 	end
 
 	if qdisc.assured < qdisc.stable or qdisc.latent == false then
@@ -540,7 +540,7 @@ local function calculateAssuredRate(qdisc)
 	elseif not qdisc.latent and qdisc.assured * qdisc.assuredTarget > qdisc.stable then
 		qdisc.stable = qdisc.assured * qdisc.assuredTarget
 	else
-		qdisc.stable = qdisc.stable * stableIncreaseResistance + qdisc.assured * (1 - stableIncreaseResistance)
+		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.assured
 	end
 end
 
@@ -583,7 +583,7 @@ local function calculateChange(qdisc)
 
 	if
 		ping.current < ping.limit
-		and ping.clear >= stableSeconds
+		and ping.clear >= stableTime
 		and (qdisc.assured > qdisc.bandwidth * 0.95 or math.random(1, 100) <= 50 * interval)
 	then
 		calculateIncrease(qdisc)
@@ -893,9 +893,9 @@ local function initialise()
 
 	pingDecreaseStepTime = 10
 	pingIncreaseStepTime = 60
-	assuredDecreaseStepTime = 30
+	assuredDecreaseStepTime = 10
 	stableIncreaseStepTime = 30
-	stableSeconds = 2
+	stableTime = 2
 	egress.assuredTarget = 0.9
 	ingress.assuredTarget = 0.9
 
@@ -908,7 +908,7 @@ local function initialise()
 
 	if config.assuredDecreaseStepTime then
 		config.assuredDecreaseStepTime = tonumber(config.assuredDecreaseStepTime)
-		if not config.assuredDecreaseStepTime or config.assuredDecreaseStepTime <= 0 or config.assuredPersistence > 1 then
+		if not config.assuredDecreaseStepTime or config.assuredDecreaseStepTime <= 0 then
 			log("LOG_ERR", "Invalid assuredDecreaseStepTime config value specified for " .. interface)
 			os.exit()
 		else
@@ -916,13 +916,13 @@ local function initialise()
 		end
 	end
 
-	if config.stableSeconds then
-		config.stableSeconds = tonumber(config.stableSeconds)
-		if not config.stableSeconds or config.stableSeconds <= 0 then
-			log("LOG_ERR", "Invalid stableSeconds config value specified for " .. interface)
+	if config.stableTime then
+		config.stableTime = tonumber(config.stableTime)
+		if not config.stableTime or config.stableTime <= 0 then
+			log("LOG_ERR", "Invalid stableTime config value specified for " .. interface)
 			os.exit()
 		else
-			stableSeconds = config.stableSeconds
+			stableTime = config.stableTime
 		end
 	end
 
