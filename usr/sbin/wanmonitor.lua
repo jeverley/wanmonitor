@@ -512,13 +512,18 @@ local function calculateAssuredRate(qdisc)
 		qdisc.latent = false
 	end
 
+	local assured = qdisc.rate
+	if ping.current > ping.limit then
+		assured = qdisc.rate * qdisc.assuredTarget
+	end
+
 	if qdisc.latent ~= false then
-		updateSample(qdisc.assuredSample, qdisc.rate * qdisc.assuredTarget, assuredPeriod)
+		updateSample(qdisc.assuredSample, assured, assuredPeriod)
 		qdisc.assured = mean(qdisc.assuredSample)
-	elseif not qdisc.assured or qdisc.rate * qdisc.assuredTarget > qdisc.assured then
-		qdisc.assured = qdisc.rate * qdisc.assuredTarget
+	elseif not qdisc.assured or assured > qdisc.assured then
+		qdisc.assured = assured
 	else
-		qdisc.assured = qdisc.assured * assuredPersistence + qdisc.rate * qdisc.assuredTarget * (1 - assuredPersistence)
+		qdisc.assured = qdisc.assured * assuredPersistence + assured * (1 - assuredPersistence)
 	end
 
 	if qdisc.assured < qdisc.stable or qdisc.latent == false then
