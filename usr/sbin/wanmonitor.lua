@@ -428,10 +428,15 @@ end
 local function updatePingStatistics()
 	if not ping.baseline then
 		ping.clear = 0
-		ping.streamingMedian = {}
-		streamingMedian(ping.streamingMedian, rtt)
+		ping.baseline = rtt
 	end
-	ping.baseline = streamingMedian(ping.streamingMedian, ping.current)
+
+	if ping.current > ping.baseline and ping.current < ping.baseline + 10 then
+		ping.baseline = ping.baseline * pingIncreaseResistance + ping.current * (1 - pingIncreaseResistance)
+	elseif ping.current < ping.baseline then
+		ping.baseline = ping.baseline * pingDecreaseResistance + ping.current * (1 - pingDecreaseResistance)
+	end		
+
 	ping.limit = ping.baseline + 5
 	ping.ceiling = ping.limit + 50
 
@@ -457,7 +462,7 @@ end
 
 local function calculateDecreaseChance(qdisc, compared)
 	if not qdisc.stable then
-		qdisc.stable = qdisc.rate * qdisc.assuredTarget
+		qdisc.stable = 1
 	end
 
 	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
@@ -530,7 +535,7 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assured = qdisc.assured * assuredPersistence + assured * (1 - assuredPersistence)
 	end
 	if firstLatent then
-		qdisc.assured = qdisc.rate
+		qdisc.assured = qdisc.rate * 0.98
 	end
 
 	if qdisc.assured < qdisc.stable or qdisc.latent == false then
@@ -547,7 +552,7 @@ local function calculateDecrease(qdisc)
 	if ping.current < ping.ceiling then
 		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 5
 	else
-		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
+		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.7
 	end
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
 
@@ -890,8 +895,8 @@ local function initialise()
 	end
 
 	assuredPersistence = 0.9
-	pingIncreaseResistance = 0.995
-	pingDecreaseResistance = 0.4
+	pingIncreaseResistance = 0.8
+	pingDecreaseResistance = 0.79
 	stableIncreaseResistance = 0.999
 	stableSeconds = 2
 	egress.assuredTarget = 0.9
