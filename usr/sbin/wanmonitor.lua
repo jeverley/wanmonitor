@@ -338,7 +338,7 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", ping.current)
 		.. ";	"
-		.. string.format("%.2f", ping.current - ping.baseline)
+		.. string.format("%.2f", ping.delta)
 		.. ";	"
 		.. string.format("%.2f", ingressBandwidth)
 		.. ";	"
@@ -430,6 +430,8 @@ local function updatePingStatistics()
 		ping.clear = 0
 		ping.baseline = rtt
 	end
+
+	ping.delta = ping.current - ping.baseline
 
 	if ping.current > ping.baseline then
 		ping.baseline = pingIncreaseResistance * ping.baseline + (1 - pingIncreaseResistance) * ping.current
@@ -893,7 +895,7 @@ local function initialise()
 
 	pingDecreaseStepTime = 10
 	pingIncreaseStepTime = 60
-	assuredDecreaseStepTime = 10
+	assuredDecreaseStepTime = 5
 	stableIncreaseStepTime = 30
 	stableTime = 2
 	egress.assuredTarget = 0.9
@@ -967,10 +969,10 @@ local function initialise()
 	end
 
 	assuredPeriod = math.ceil(1.5 / interval)
-	assuredPersistence = math.exp(math.log(interval) / (assuredDecreaseStepTime / interval))
-	pingDecreaseResistance = math.exp(math.log(interval) / (pingDecreaseStepTime / interval))
-	pingIncreaseResistance = math.exp(math.log(interval) / (pingIncreaseStepTime / interval))
-	stableIncreaseResistance = math.exp(math.log(interval) / (stableIncreaseStepTime / interval))
+	assuredPersistence = math.exp(math.log(0.5) / (assuredDecreaseStepTime / interval))
+	pingDecreaseResistance = math.exp(math.log(0.5) / (pingDecreaseStepTime / interval))
+	pingIncreaseResistance = math.exp(math.log(0.5) / (pingIncreaseStepTime / interval))
+	stableIncreaseResistance = math.exp(math.log(0.5) / (stableIncreaseStepTime / interval))
 end
 
 local function daemonise()
