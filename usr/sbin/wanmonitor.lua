@@ -3,9 +3,9 @@ Copyright 2021 Jack Everley
 Lua script for monitoring an OpenWrt WAN interface and auto-adjusting SQM cake egress and ingress bandwidth
 Command line arguments:
 	required	-i	(--interface)	Specifies the wan interface to monitor
-	optional	-c	(--console)	Run attached to an interactive shell
-	optional	-v	(--verbose)	Print all intervals
-	optional	-l	(--log)	Write intervals to log file path
+	optional	-c	(--console)		Run attached to an interactive shell
+	optional	-v	(--verbose)		Print all ping intervals
+	optional	-l	(--log)			Write intervals to log file path
 ]]
 
 local jsonc = require("luci.jsonc")
@@ -15,40 +15,41 @@ local systime = require("posix.sys.time")
 local unistd = require("posix.unistd")
 
 local egress
+local device
 local ingress
 local interface
-local device
 local pid
+local pidChild
 local pidFile
-local childPid
 local ping
 local statusFile
 
+local autorate
+local assuredPeriod
+local assuredPersistence
 local console
-local verbose
-local logFile
 local dscp
 local hosts
 local interval
 local iptype
-local pingIncreaseResistance
+local logFile
+local mssJitterFix
 local pingDecreaseResistance
-local assuredPersistence
-local stableSeconds
-local assuredPeriod
+local pingIncreaseResistance
 local reconnect
-local autorate
 local rtt
+local stableSeconds
+local verbose
 
 local hostCount
-local responseCount
-local retries
-local retriesRemaining
 local intervalEpoch
+local pingStatus
 local previousEpoch
 local previousRxBytes
 local previousTxBytes
-local pingStatus
+local responseCount
+local retries
+local retriesRemaining
 
 local function log(priority, message)
 	syslog.openlog("wanmonitor", syslog.LOG_PID, syslog.LOG_DAEMON)
@@ -60,8 +61,8 @@ local function log(priority, message)
 end
 
 local function cleanup()
-	if childPid then
-		signal.kill(childPid, signal.SIGKILL)
+	if pidChild then
+		signal.kill(pidChild, signal.SIGKILL)
 	end
 	os.remove(pidFile)
 	os.remove(statusFile)
@@ -75,8 +76,8 @@ end
 local function resetMssJitterFix()
 	egress.mssJitterFix = nil
 	ingress.mssJitterFix = nil
-	if childPid then
-		signal.kill(childPid, signal.SIGKILL)
+	if pidChild then
+		signal.kill(pidChild, signal.SIGKILL)
 		pingStatus = 3
 	end
 end
@@ -728,15 +729,15 @@ local function pingLoop()
 			.. table.concat(hosts, " ")
 			.. " 2>&1"
 	)
-	childPid = execute("pgrep -n -x oping -P " .. pid)
-	childPid = tonumber(childPid)
+	pidChild = execute("pgrep -n -x oping -P " .. pid)
+	pidChild = tonumber(pidChild)
 
 	repeat
 		local line = fd:read("*line")
 		processPingOutput(line)
 	until not line
 	fd:close()
-	childPid = nil
+	pidChild = nil
 end
 
 local function initialise()
@@ -960,8 +961,8 @@ local function initialise()
 
 	assuredPeriod = math.ceil(1.5 / interval)
 	assuredPersistence = assuredPersistence ^ interval
-	pingIncreaseResistance = pingIncreaseResistance ^ interval
 	pingDecreaseResistance = pingDecreaseResistance ^ interval
+	pingIncreaseResistance = pingIncreaseResistance ^ interval
 	stableIncreaseResistance = stableIncreaseResistance ^ interval
 end
 
