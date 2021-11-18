@@ -5,7 +5,7 @@ Command line arguments:
 	required	-i	(--interface)	Specifies the wan interface to monitor
 	optional	-c	(--console)	Run attached to an interactive shell
 	optional	-v	(--verbose)	Print all intervals
-	optional	-l	(--log)	Write intervals to log file path
+	optional	-l	(--log)		Write intervals to log file path
 ]]
 
 local jsonc = require("luci.jsonc")
@@ -513,7 +513,7 @@ local function calculateAssuredRate(qdisc)
 	end
 
 	local assured = qdisc.rate
-	if ping.current > ping.limit then
+	if ping.current > ping.limit and (not qdisc.assuredSample or qdisc.assuredSample[1]) then
 		assured = qdisc.rate * qdisc.assuredTarget
 	end
 
