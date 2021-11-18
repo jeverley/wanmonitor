@@ -5,7 +5,7 @@ Command line arguments:
 	required	-i	(--interface)	Specifies the wan interface to monitor
 	optional	-c	(--console)	Run attached to an interactive shell
 	optional	-v	(--verbose)	Print all intervals
-	optional	-l	(--log)	Write intervals to log file path
+	optional	-l	(--log)		Write intervals to log file path
 ]]
 
 local jsonc = require("luci.jsonc")
@@ -33,7 +33,7 @@ local interval
 local iptype
 local pingIncreaseResistance
 local pingDecreaseResistance
-local assuredPersistance
+local assuredPersistence
 local stableSeconds
 local assuredPeriod
 local reconnect
@@ -523,7 +523,7 @@ local function calculateAssuredRate(qdisc)
 	elseif not qdisc.assured or qdisc.rate * qdisc.assuredTarget > qdisc.assured then
 		qdisc.assured = qdisc.rate * qdisc.assuredTarget
 	else
-		qdisc.assured = qdisc.assured * assuredPersistance + qdisc.rate * qdisc.assuredTarget * (1 - assuredPersistance)
+		qdisc.assured = qdisc.assured * assuredPersistence + qdisc.rate * qdisc.assuredTarget * (1 - assuredPersistence)
 	end
 
 	if qdisc.assured < qdisc.stable or not qdisc.latent then
@@ -881,7 +881,7 @@ local function initialise()
 		return
 	end
 
-	assuredPersistance = 0.7
+	assuredPersistence = 0.8
 	pingIncreaseResistance = 0.995
 	pingDecreaseResistance = 0.25
 	stableIncreaseResistance = 0.999
@@ -957,7 +957,7 @@ local function initialise()
 	end
 
 	assuredPeriod = math.ceil(1.5 / interval)
-	assuredPersistance = assuredPersistance ^ interval
+	assuredPersistence = assuredPersistence ^ interval
 	pingIncreaseResistance = pingIncreaseResistance ^ interval
 	pingDecreaseResistance = pingDecreaseResistance ^ interval
 	stableIncreaseResistance = stableIncreaseResistance ^ interval
