@@ -457,7 +457,7 @@ end
 
 local function calculateDecreaseChance(qdisc, compared)
 	if not qdisc.stable then
-		qdisc.stable = 1
+		qdisc.stable = qdisc.rate * qdisc.assuredTarget
 	end
 
 	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
@@ -510,6 +510,7 @@ local function calculateAssuredRate(qdisc)
 	elseif qdisc.latent then
 		qdisc.latent = nil
 	else
+		qdisc.assuredSample = nil
 		qdisc.latent = false
 	end
 
