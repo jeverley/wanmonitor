@@ -523,7 +523,7 @@ local function calculateAssuredRate(qdisc)
 
 	if qdisc.assured < qdisc.stable or qdisc.latent == false then
 		qdisc.stable = qdisc.assured
-	elseif not qdisc.latent then
+	elseif not qdisc.latent and qdisc.assured * qdisc.assuredTarget > qdisc.stable then
 		qdisc.stable = qdisc.assured * qdisc.assuredTarget
 	else
 		qdisc.stable = qdisc.stable * stableIncreaseResistance + qdisc.assured * (1 - stableIncreaseResistance)
