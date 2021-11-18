@@ -5,7 +5,7 @@ Command line arguments:
 	required	-i	(--interface)	Specifies the wan interface to monitor
 	optional	-c	(--console)	Run attached to an interactive shell
 	optional	-v	(--verbose)	Print all intervals
-	optional	-l	(--log /path)	Write intervals to log file
+	optional	-l	(--log)	Write intervals to log file path
 ]]
 
 local jsonc = require("luci.jsonc")
