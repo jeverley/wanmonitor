@@ -553,7 +553,7 @@ end
 local function calculateIncrease(qdisc)
 	local targetMultiplier = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum) / qdisc.bandwidth
 	if targetMultiplier < 1 then
-		targetMultiplier = targetMultiplier ^ 10
+		targetMultiplier = targetMultiplier ^ 15
 	end
 	qdisc.change = qdisc.bandwidth * 0.05 * targetMultiplier
 
