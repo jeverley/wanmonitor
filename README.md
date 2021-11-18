@@ -94,24 +94,61 @@ Example below:
 
 ```json
 {
-    "ping": 34.359999999999999,
-    "pingBaseline": 28.62471516775733,
+    "ping": {
+        "clear": 0,
+        "current": 48.719999999999999,
+        "limit": 46.0400390625,
+        "times": [
+            48.719999999999999,
+            63.289999999999999,
+            55.409999999999997
+        ],
+        "baseline": 41.0400390625,
+        "ceiling": 96.0400390625,
+        "streamingMedian": {
+            "median": 41.0400390625,
+            "step": 0.006103515625
+        }
+    },
     "device": "wwan0",
     "egress": {
-        "bandwidth": 981.91200000000003,
-        "maximum": 1385.8266554230368,
+        "latent": false,
+        "utilisation": 0.0045528814157078457,
+        "bandwidth": 1199.5599999999999,
+        "handle": "9c8a:",
+        "assured": 307.52527285440124,
+        "assuredTarget": 0.90000000000000002,
+        "maximum": 1137.252768593685,
         "device": "wwan0",
+        "rate": 5.4614544310265032,
+        "assuredSample": [
+            1136.9213454541516,
+            842.58915135049858,
+            477.91355857495455
+        ],
         "change": 0,
-        "rate": 407.34954748331836,
-        "target": 1385.8266554230368
+        "kind": "cake",
+        "stable": 307.52527285440124,
+        "mssJitterFix": true
     },
     "ingress": {
-        "bandwidth": 19777.312000000002,
-        "maximum": 31009.577300174991,
+        "latent": false,
+        "utilisation": 0.00024180351732188763,
+        "bandwidth": 22520.864000000001,
+        "handle": "9c87:",
+        "assured": 136.05987120168882,
+        "assuredTarget": 0.90000000000000002,
+        "maximum": 19312.318198628818,
         "device": "br-lan",
+        "rate": 5.4456241283278759,
+        "assuredSample": [
+            2721.3730865928183,
+            149.85666008578772
+        ],
         "change": 0,
-        "rate": 11464.306138738317,
-        "target": 31009.577300174991
+        "mssJitterFix": false,
+        "stable": 136.05987120168882,
+        "kind": "cake"
     },
     "interface": "wwan"
 }
