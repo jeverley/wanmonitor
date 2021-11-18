@@ -5,7 +5,7 @@ Command line arguments:
 	required	-i	(--interface)	Specifies the wan interface to monitor
 	optional	-c	(--console)	Run attached to an interactive shell
 	optional	-v	(--verbose)	Print all intervals
-	optional	-l	(--log)		Write intervals to log file path
+	optional	-l	(--log)	Write intervals to log file path
 ]]
 
 local jsonc = require("luci.jsonc")
@@ -428,7 +428,7 @@ local function updatePingStatistics()
 		ping.baseline = ping.baseline * pingDecreaseResistance + ping.current * (1 - pingDecreaseResistance)
 	end
 
-	ping.limit = ping.baseline * 1.7
+	ping.limit = ping.baseline * 2
 	ping.target = ping.baseline * 1.4
 
 	if ping.current > ping.limit then
@@ -526,8 +526,10 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assured = qdisc.assured * assuredPersistence + qdisc.rate * qdisc.assuredTarget * (1 - assuredPersistence)
 	end
 
-	if qdisc.assured < qdisc.stable or not qdisc.latent then
+	if qdisc.assured < qdisc.stable or qdisc.latent == false then
 		qdisc.stable = qdisc.assured
+	elseif not qdisc.latent then
+		qdisc.stable = qdisc.assured * qdisc.assuredTarget
 	else
 		qdisc.stable = qdisc.stable * stableIncreaseResistance + qdisc.assured * (1 - stableIncreaseResistance)
 	end
@@ -883,7 +885,7 @@ local function initialise()
 
 	assuredPersistence = 0.8
 	pingIncreaseResistance = 0.995
-	pingDecreaseResistance = 0.25
+	pingDecreaseResistance = 0.4
 	stableIncreaseResistance = 0.999
 	stableSeconds = 2
 	egress.assuredTarget = 0.9
