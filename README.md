@@ -55,6 +55,9 @@ An additional argument -l can be used to specify a log file path.
 ```shell
 lua /usr/sbin/wanmonitor.lua -i wwan -c -v -l /tmp/wanmonitor.wwan.log
 ```
+Log format headers:
+Ingress utilisation | Egress utilisation | Ping baseline | Ping | Ping delta | Ingress bandwidth | Egress bandwidth | Ingress rate | Egress rate | Ingress assured | Egress assured
+------------ | ------------- | ------------- | ------------- | ------------- | ------------- | ------------- | ------------- | ------------- | ------------- | -------------
 
 **The bandwidth rates configured for your download/upload under SQM setup are used by the service as starting points for adaptive bandwidth control.**
 
