@@ -67,13 +67,23 @@ The service configuration is controlled through the config file:
 
 A valid WAN interface name should be specified for each wanmonitor config section.
 
-It is recommended that the ingress and egress assured parateters are set in the 0.8-0.9 range for an LTE link, please start with the defaults (exact values will depend on your setup).
+Example config file below:
 
-**The values do not determine the link's maximum bandwith, they are used to compensate for rate jitter.**
+```
+config interface 'wan'
+	option enabled '0'
+	option reconnect '0'
+	option autorate '0'
 
-Note that these should be configured to match the troughs of a saturated line rate as shown below:
-
-![image](https://user-images.githubusercontent.com/46714706/139727270-ac732c63-e33d-4d1b-abb5-711700062220.png)
+config interface 'wwan'
+	option enabled '1'
+	option ingressDevice 'br-lan'
+	option reconnect '1'
+	option autorate '1'
+	option verbose '1'
+	option mssJitterFix '1'
+	option logFile ''
+```
 
 Option | Type | Description | Examples | Default
 ------------ | ------------- | ------------- | ------------- | -------------
