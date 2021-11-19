@@ -521,7 +521,7 @@ local function calculateAssuredRate(qdisc)
 			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
 		end
 	else
-		if qdisc.assuredProportion < 1 then
+		if qdisc.assuredProportion < 1 and ping.current < ping.limit then
 			qdisc.assuredProportion = qdisc.assuredProportion + interval * 0.1
 		end
 		qdisc.assuredSample = nil
