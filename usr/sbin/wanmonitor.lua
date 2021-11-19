@@ -26,6 +26,7 @@ local statusFile
 
 local autorate
 local assuredDecreaseResistance
+local assuredDecreaseStepTime
 local console
 local dscp
 local hosts
@@ -409,6 +410,31 @@ local function updateQdisc(qdisc)
 	end
 end
 
+local function updatePingStatisticsEWMA()
+	if not ping.baseline then
+		ping.clear = 0
+		ping.baseline = rtt
+	end
+
+	ping.delta = ping.current - ping.baseline
+
+	if ping.current > ping.baseline then
+		ping.baseline = pingIncreaseResistance * ping.baseline + (1 - pingIncreaseResistance) * ping.current
+	elseif ping.current < ping.baseline then
+		ping.baseline = pingDecreaseResistance * ping.baseline + (1 - pingDecreaseResistance) * ping.current
+	end
+
+	ping.limit = ping.baseline + 5
+	ping.ceiling = ping.baseline + 70
+
+	if ping.current > ping.limit then
+		ping.clear = 0
+		return
+	end
+
+	ping.clear = ping.clear + interval
+end
+
 local function updatePingStatistics()
 	if not ping.streamingMedian then
 		ping.clear = 0
@@ -416,10 +442,11 @@ local function updatePingStatistics()
 		streamingMedian(ping.streamingMedian, rtt)
 	end
 
-	ping.delta = ping.current - ping.baseline
 	ping.baseline = streamingMedian(ping.streamingMedian, ping.current, 0.1)
 	ping.limit = ping.baseline + 5
 	ping.ceiling = ping.baseline + 70
+
+	ping.delta = ping.current - ping.baseline
 
 	if ping.current > ping.limit then
 		ping.clear = 0
@@ -887,6 +914,7 @@ local function initialise()
 	end
 
 	mssJitterFix = false
+	assuredDecreaseStepTime = 1
 	stableIncreaseStepTime = 5
 	rtt = 50
 	stableTime = 0.5
@@ -905,6 +933,16 @@ local function initialise()
 			os.exit()
 		else
 			mssJitterFix = config.mssJitterFix
+		end
+	end
+
+	if config.assuredDecreaseStepTime then
+		config.assuredDecreaseStepTime = tonumber(config.assuredDecreaseStepTime)
+		if not config.assuredDecreaseStepTime or config.assuredDecreaseStepTime <= 0 then
+			log("LOG_ERR", "Invalid assuredDecreaseStepTime config value specified for " .. interface)
+			os.exit()
+		else
+			assuredDecreaseStepTime = config.assuredDecreaseStepTime
 		end
 	end
 
@@ -938,6 +976,7 @@ local function initialise()
 		end
 	end
 
+	assuredDecreaseResistance = math.exp(math.log(0.5) / (assuredDecreaseStepTime / interval))
 	stableIncreaseResistance = math.exp(math.log(0.5) / (stableIncreaseStepTime / interval))
 end
 
