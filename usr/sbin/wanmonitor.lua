@@ -459,12 +459,8 @@ local function updatePingStatisticsEWMA()
 end
 
 local function updatePingStatistics()
-	if not ping.baseline then
-		ping.clear = 0
-		ping.baseline = rtt
-	end
-
 	if not ping.streamingMedian then
+		ping.clear = 0
 		ping.streamingMedian = {}
 		streamingMedian(ping.streamingMedian, rtt)
 	end
