@@ -503,7 +503,7 @@ local function adjustDecreaseChance(qdisc, compared)
 		compared.decreaseChance = compared.decreaseChance / qdisc.decreaseChance
 		qdisc.decreaseChance = 1
 	end
-	if qdisc.decreaseChance < 0.01 then
+	if qdisc.decreaseChance < 0.001 then
 		qdisc.decreaseChance = nil
 	end
 end
@@ -895,7 +895,7 @@ local function initialise()
 	end
 
 	mssJitterFix = false
-	assuredDecreaseStepTime = 0.5
+	assuredDecreaseStepTime = 0.25
 	stableIncreaseStepTime = 5
 	rtt = 50
 	stableTime = 0.5
