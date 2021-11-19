@@ -550,7 +550,6 @@ local function calculateAssuredRate(qdisc)
 end
 
 local function calculateDecrease(qdisc)
-	local pingReducer = 1
 	if ping.current < ping.ceiling then
 		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 1.5
 	else
