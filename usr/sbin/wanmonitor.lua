@@ -25,8 +25,9 @@ local ping
 local statusFile
 
 local autorate
+local assuredDecreaseResistance
+local assuredDecreaseStepTime
 local assuredPeriod
-local assuredPersistence
 local console
 local dscp
 local hosts
@@ -35,9 +36,13 @@ local iptype
 local logFile
 local mssJitterFix
 local pingDecreaseResistance
+local pingDecreaseStepTime
 local pingIncreaseResistance
+local pingIncreaseStepTime
 local reconnect
 local rtt
+local stableIncreaseResistance
+local stableIncreaseStepTime
 local stableTime
 local verbose
 
@@ -352,6 +357,10 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.assured)
 		.. ";	"
+		.. string.format("%.2f", ingress.assuredProportion)
+		.. ";	"
+		.. string.format("%.2f", egress.assuredProportion)
+		.. ";	"
 		.. string.format(
 			"%.2f",
 			ingressStableComparision
@@ -464,7 +473,7 @@ end
 
 local function calculateDecreaseChance(qdisc, compared)
 	if not qdisc.stable then
-		qdisc.stable = qdisc.rate * 0.5
+		qdisc.stable = qdisc.rate * 0.4
 	end
 
 	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
@@ -489,7 +498,7 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
-	local amplify = 6
+	local amplify = 5
 	if not compared.decreaseChance then
 		if qdisc.decreaseChance > 1 then
 			qdisc.decreaseChance = 1
@@ -513,34 +522,33 @@ local function calculateAssuredRate(qdisc)
 	if qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
 		if not qdisc.latent then
 			qdisc.assuredSample = {}
-			firstLatent = true
+			qdisc.latent = 0
+		elseif qdisc.latent <= 5 - interval then
+			qdisc.latent = qdisc.latent + interval
 		end
-		qdisc.latent = true
-	elseif qdisc.latent then
-		qdisc.latent = nil
 	else
 		qdisc.assuredSample = nil
-		qdisc.latent = false
+		qdisc.latent = nil
 	end
 
-	local assured = qdisc.rate
-	if ping.current > ping.limit then
-		assured = qdisc.rate * qdisc.assuredTarget
-	end
-
-	if qdisc.latent ~= false then
-		updateSample(qdisc.assuredSample, assured, assuredPeriod)
-		qdisc.assured = mean(qdisc.assuredSample)
-	elseif not qdisc.assured or assured > qdisc.assured then
-		qdisc.assured = assured
+	if qdisc.latent then
+		qdisc.assuredProportion = 1 - qdisc.latent * 0.1
 	else
-		qdisc.assured = assuredPersistence * qdisc.assured + (1 - assuredPersistence) * assured
+		qdisc.assuredProportion = 1
 	end
 
-	if qdisc.assured < qdisc.stable or qdisc.latent == false then
+	if qdisc.latent then
+		updateSample(qdisc.assuredSample, qdisc.rate, assuredPeriod)
+		qdisc.assured = mean(qdisc.assuredSample) * qdisc.assuredProportion
+	elseif not qdisc.assured or qdisc.rate * qdisc.assuredProportion > qdisc.assured then
+		qdisc.assured = qdisc.rate * qdisc.assuredProportion
+	else
+		qdisc.assured = assuredDecreaseResistance * qdisc.assured
+			+ (1 - assuredDecreaseResistance) * qdisc.rate * qdisc.assuredProportion
+	end
+
+	if qdisc.assured < qdisc.stable or not qdisc.latent then
 		qdisc.stable = qdisc.assured
-	elseif not qdisc.latent and qdisc.assured * qdisc.assuredTarget > qdisc.stable then
-		qdisc.stable = qdisc.assured * qdisc.assuredTarget
 	else
 		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.assured
 	end
@@ -561,7 +569,7 @@ local function calculateDecrease(qdisc)
 end
 
 local function calculateIncrease(qdisc)
-	local targetMultiplier = math.max(qdisc.bandwidth * qdisc.assuredTarget, qdisc.maximum) / qdisc.bandwidth
+	local targetMultiplier = math.max(qdisc.bandwidth * 0.9, qdisc.maximum) / qdisc.bandwidth
 	if targetMultiplier < 1 then
 		targetMultiplier = targetMultiplier ^ 15
 	end
@@ -582,11 +590,11 @@ local function calculateChange(qdisc)
 		calculateDecrease(qdisc)
 		return
 	end
-
+	
 	if
 		ping.current < ping.limit
 		and ping.clear >= stableTime
-		and (qdisc.assured > qdisc.bandwidth * 0.95 or math.random(1, 100) <= 50 * interval)
+		and (qdisc.assured > qdisc.bandwidth * 0.98 or math.random(1, 100) <= 50 * interval)
 	then
 		calculateIncrease(qdisc)
 		return
@@ -893,13 +901,11 @@ local function initialise()
 		return
 	end
 
-	pingDecreaseStepTime = 10
-	pingIncreaseStepTime = 60
-	assuredDecreaseStepTime = 5
-	stableIncreaseStepTime = 30
-	stableTime = 2
-	egress.assuredTarget = 0.9
-	ingress.assuredTarget = 0.9
+	assuredDecreaseStepTime = 2
+	pingDecreaseStepTime = 30
+	pingIncreaseStepTime = 110
+	stableIncreaseStepTime = 10
+	stableTime = 1
 
 	egress.device = device
 	if not config.ingressDevice or device == config.ingressDevice then
@@ -928,26 +934,6 @@ local function initialise()
 		end
 	end
 
-	if config.egressAssured then
-		config.egressAssured = tonumber(config.egressAssured)
-		if not config.egressAssured or config.egressAssured <= 0 or config.egressAssured > 1 then
-			log("LOG_ERR", "Invalid egressAssured config value specified for " .. interface)
-			os.exit()
-		else
-			egress.assuredTarget = config.egressAssured
-		end
-	end
-
-	if config.ingressAssured then
-		config.ingressAssured = tonumber(config.ingressAssured)
-		if not config.ingressAssured or config.ingressAssured <= 0 or config.ingressAssured > 1 then
-			log("LOG_ERR", "Invalid ingressAssured config value specified for " .. interface)
-			os.exit()
-		else
-			ingress.assuredTarget = config.ingressAssured
-		end
-	end
-
 	if config.rtt then
 		config.rtt = tonumber(config.rtt)
 		if not config.rtt or config.rtt <= 0 then
@@ -968,8 +954,8 @@ local function initialise()
 		end
 	end
 
-	assuredPeriod = math.ceil(1.5 / interval)
-	assuredPersistence = math.exp(math.log(0.5) / (assuredDecreaseStepTime / interval))
+	assuredPeriod = math.ceil(1 / interval)
+	assuredDecreaseResistance = math.exp(math.log(0.5) / (assuredDecreaseStepTime / interval))
 	pingDecreaseResistance = math.exp(math.log(0.5) / (pingDecreaseStepTime / interval))
 	pingIncreaseResistance = math.exp(math.log(0.5) / (pingIncreaseStepTime / interval))
 	stableIncreaseResistance = math.exp(math.log(0.5) / (stableIncreaseStepTime / interval))
