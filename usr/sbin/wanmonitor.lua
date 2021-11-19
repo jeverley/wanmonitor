@@ -2,7 +2,7 @@
 Copyright 2021 Jack Everley
 Lua script for monitoring an OpenWrt WAN interface and auto-adjusting SQM cake egress and ingress bandwidth
 Command line arguments:
-	required	-i	(--interface)	Specifies the wan interface to monitor
+	required	-i	(--interface)		Specifies the wan interface to monitor
 	optional	-c	(--console)		Run attached to an interactive shell
 	optional	-v	(--verbose)		Print all ping intervals
 	optional	-l	(--log)			Write intervals to log file path
@@ -33,7 +33,7 @@ local dscp
 local hosts
 local interval
 local iptype
-local logFile
+local logfile
 local mssJitterFix
 local pingDecreaseResistance
 local pingDecreaseStepTime
@@ -111,10 +111,13 @@ local function updateSample(sample, observation, period)
 	end
 end
 
-local function streamingMedian(persist, observation)
+local function streamingMedian(persist, observation, minimumStep)
 	if not persist.median or not persist.step then
 		persist.median = observation
 		persist.step = math.max(math.abs(observation / 2), 1)
+	end
+	if minimumStep and persist.step < minimumStep then
+		persist.step = minimumStep
 	end
 	if persist.median > observation then
 		persist.median = persist.median - persist.step
@@ -296,7 +299,7 @@ local function writeStatus()
 end
 
 local function adjustmentLog()
-	if not logFile and not console then
+	if not logfile and not console then
 		return
 	end
 
@@ -316,7 +319,7 @@ local function adjustmentLog()
 	if ingress.bandwidth then
 		ingressBandwidth = ingress.bandwidth
 	end
-	if ingress.stableComparision then
+	if ingress.decreaseChance then
 		ingressDecreaseChance = ingress.decreaseChance
 		ingressStableComparision = ingress.stableComparision
 	end
@@ -328,7 +331,7 @@ local function adjustmentLog()
 	if egress.bandwidth then
 		egressBandwidth = egress.bandwidth
 	end
-	if egress.stableComparision then
+	if egress.decreaseChance then
 		egressStableComparision = egress.stableComparision
 		egressDecreaseChance = egress.decreaseChance
 	end
@@ -357,10 +360,6 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.assured)
 		.. ";	"
-		.. string.format("%.2f", ingress.assuredProportion)
-		.. ";	"
-		.. string.format("%.2f", egress.assuredProportion)
-		.. ";	"
 		.. string.format(
 			"%.2f",
 			ingressStableComparision
@@ -385,9 +384,9 @@ local function adjustmentLog()
 	if console then
 		print(logLine)
 	end
-	if logFile then
-		os.execute("mkdir -p $(dirname '" .. logFile .. "')")
-		writeFile(logFile, logLine .. "\n", "a")
+	if logfile then
+		os.execute("mkdir -p $(dirname '" .. logfile .. "')")
+		writeFile(logfile, logLine .. "\n", "a")
 	end
 end
 
@@ -434,7 +433,7 @@ local function updateQdisc(qdisc)
 	end
 end
 
-local function updatePingStatistics()
+local function updatePingStatisticsEWMA()
 	if not ping.baseline then
 		ping.clear = 0
 		ping.baseline = rtt
@@ -449,7 +448,32 @@ local function updatePingStatistics()
 	end
 
 	ping.limit = ping.baseline + 5
-	ping.ceiling = ping.limit + 50
+	ping.ceiling = ping.baseline + 70
+
+	if ping.current > ping.limit then
+		ping.clear = 0
+		return
+	end
+
+	ping.clear = ping.clear + interval
+end
+
+local function updatePingStatistics()
+	if not ping.baseline then
+		ping.clear = 0
+		ping.baseline = rtt
+	end
+
+	if not ping.streamingMedian then
+		ping.streamingMedian = {}
+		streamingMedian(ping.streamingMedian, rtt)
+	end
+
+	ping.baseline = streamingMedian(ping.streamingMedian, ping.current, 0.1)
+	ping.limit = ping.baseline + 5
+	ping.ceiling = ping.baseline + 70
+
+	ping.delta = ping.current - ping.baseline
 
 	if ping.current > ping.limit then
 		ping.clear = 0
@@ -473,7 +497,7 @@ end
 
 local function calculateDecreaseChance(qdisc, compared)
 	if not qdisc.stable then
-		qdisc.stable = qdisc.rate * 0.4
+		qdisc.stable = qdisc.bandwidth * 0.01 * 0.75 + qdisc.rate * 0.25
 	end
 
 	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
@@ -488,6 +512,15 @@ local function calculateDecreaseChance(qdisc, compared)
 
 	if compared.utilisation and compared.utilisation > 1 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.7 / compared.utilisation
+	end
+
+	if
+		compared.assured
+		and compared.rate < compared.stable
+		and compared.rate / compared.assured > 0.6
+		and compared.rate / compared.assured < 0.8
+	then
+		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.1
 	end
 
 	qdisc.decreaseChance = qdisc.stableComparision * qdisc.decreaseChanceReducer
@@ -515,36 +548,43 @@ local function adjustDecreaseChance(qdisc, compared)
 		compared.decreaseChance = compared.decreaseChance / qdisc.decreaseChance
 		qdisc.decreaseChance = 1
 	end
+	if qdisc.decreaseChance < 0.01 then
+		qdisc.decreaseChance = nil
+	end
 end
 
 local function calculateAssuredRate(qdisc)
-	local firstLatent
-	if qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
+	if not qdisc.assuredProportion then
+		qdisc.assuredProportion = 1
+	end
+	if qdisc.decreaseChance then
 		if not qdisc.latent then
 			qdisc.assuredSample = {}
-			qdisc.latent = 0
-		elseif qdisc.latent <= 5 - interval then
-			qdisc.latent = qdisc.latent + interval
+			qdisc.latent = true
+		end
+		if qdisc.assuredProportion > 0.6 + interval * 0.1 then
+			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
 		end
 	else
+		if qdisc.assuredProportion < 1 then
+			qdisc.assuredProportion = qdisc.assuredProportion + interval * 0.1
+		end
 		qdisc.assuredSample = nil
 		qdisc.latent = nil
 	end
 
 	if qdisc.latent then
-		qdisc.assuredProportion = 1 - qdisc.latent * 0.1
-	else
-		qdisc.assuredProportion = 1
-	end
-
-	if qdisc.latent then
-		updateSample(qdisc.assuredSample, qdisc.rate, assuredPeriod)
+		updateSample(qdisc.assuredSample, qdisc.rate, 2)
 		qdisc.assured = mean(qdisc.assuredSample) * qdisc.assuredProportion
 	elseif not qdisc.assured or qdisc.rate * qdisc.assuredProportion > qdisc.assured then
 		qdisc.assured = qdisc.rate * qdisc.assuredProportion
 	else
 		qdisc.assured = assuredDecreaseResistance * qdisc.assured
 			+ (1 - assuredDecreaseResistance) * qdisc.rate * qdisc.assuredProportion
+	end
+
+	if qdisc.assured > qdisc.bandwidth then
+		qdisc.assured = qdisc.bandwidth
 	end
 
 	if qdisc.assured < qdisc.stable or not qdisc.latent then
@@ -557,9 +597,9 @@ end
 local function calculateDecrease(qdisc)
 	local pingReducer = 1
 	if ping.current < ping.ceiling then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 5
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 1.5
 	else
-		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.7
+		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.6
 	end
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
 
@@ -590,11 +630,11 @@ local function calculateChange(qdisc)
 		calculateDecrease(qdisc)
 		return
 	end
-	
+
 	if
-		ping.current < ping.limit
-		and ping.clear >= stableTime
-		and (qdisc.assured > qdisc.bandwidth * 0.98 or math.random(1, 100) <= 50 * interval)
+		ping.clear > stableTime
+		and math.random(1, 100) <= 50 * interval
+		and (qdisc.assured > qdisc.bandwidth * 0.999 or qdisc.utilisation < 0.6)
 	then
 		calculateIncrease(qdisc)
 		return
@@ -798,8 +838,7 @@ local function initialise()
 	reconnect = false
 	autorate = false
 	verbose = false
-	logFile = nil
-	rtt = 50
+	logfile = nil
 
 	if config.dscp then
 		dscp = config.dscp
@@ -877,23 +916,23 @@ local function initialise()
 		end
 	end
 
-	local logFileArg = readArg("l", "log")
-	if logFileArg then
-		if type(logFileArg) == "string" and string.find(logFileArg, "^/[^%$]*$") then
-			logFile = logFileArg
+	local logfileArg = readArg("l", "log")
+	if logfileArg then
+		if type(logfileArg) == "string" and string.find(logfileArg, "^/[^%$]*$") then
+			logfile = logfileArg
 		else
 			log("LOG_ERR", "Invalid log arguement path")
 			os.exit()
 		end
-	elseif config.logFile then
-		if not string.find(config.logFile, "^/[^%$]*$") then
-			config.logFile = nil
+	elseif config.logfile then
+		if not string.find(config.logfile, "^/[^%$]*$") then
+			config.logfile = nil
 		end
-		if config.logFile == nil then
-			log("LOG_ERR", "Invalid logFile config value specified for " .. interface)
+		if config.logfile == nil then
+			log("LOG_ERR", "Invalid logfile config value specified for " .. interface)
 			os.exit()
 		else
-			logFile = config.logFile
+			logfile = config.logfile
 		end
 	end
 
@@ -901,17 +940,29 @@ local function initialise()
 		return
 	end
 
-	assuredDecreaseStepTime = 2
+	mssJitterFix = false
+	assuredDecreaseStepTime = 1
 	pingDecreaseStepTime = 30
 	pingIncreaseStepTime = 110
 	stableIncreaseStepTime = 10
-	stableTime = 1
+	rtt = 50
+	stableTime = 0.5
 
 	egress.device = device
 	if not config.ingressDevice or device == config.ingressDevice then
 		ingress.device = "ifb4" .. string.sub(device, 1, 11)
 	else
 		ingress.device = config.ingressDevice
+	end
+
+	if config.mssJitterFix then
+		config.mssJitterFix = toboolean(config.mssJitterFix)
+		if config.mssJitterFix == nil then
+			log("LOG_ERR", "Invalid mssJitterFix config value specified for " .. interface)
+			os.exit()
+		else
+			mssJitterFix = config.mssJitterFix
+		end
 	end
 
 	if config.assuredDecreaseStepTime then
@@ -924,13 +975,33 @@ local function initialise()
 		end
 	end
 
-	if config.stableTime then
-		config.stableTime = tonumber(config.stableTime)
-		if not config.stableTime or config.stableTime <= 0 then
-			log("LOG_ERR", "Invalid stableTime config value specified for " .. interface)
+	if config.pingDecreaseStepTime then
+		config.pingDecreaseStepTime = tonumber(config.pingDecreaseStepTime)
+		if not config.pingDecreaseStepTime or config.pingDecreaseStepTime <= 0 then
+			log("LOG_ERR", "Invalid pingDecreaseStepTime config value specified for " .. interface)
 			os.exit()
 		else
-			stableTime = config.stableTime
+			pingDecreaseStepTime = config.pingDecreaseStepTime
+		end
+	end
+
+	if config.pingIncreaseStepTime then
+		config.pingIncreaseStepTime = tonumber(config.pingIncreaseStepTime)
+		if not config.pingIncreaseStepTime or config.pingIncreaseStepTime <= 0 then
+			log("LOG_ERR", "Invalid pingIncreaseStepTime config value specified for " .. interface)
+			os.exit()
+		else
+			pingIncreaseStepTime = config.pingIncreaseStepTime
+		end
+	end
+
+	if config.stableIncreaseStepTime then
+		config.stableIncreaseStepTime = tonumber(config.stableIncreaseStepTime)
+		if not config.stableIncreaseStepTime or config.stableIncreaseStepTime <= 0 then
+			log("LOG_ERR", "Invalid stableIncreaseStepTime config value specified for " .. interface)
+			os.exit()
+		else
+			stableIncreaseStepTime = config.stableIncreaseStepTime
 		end
 	end
 
@@ -944,17 +1015,16 @@ local function initialise()
 		end
 	end
 
-	if config.mssJitterFix then
-		config.mssJitterFix = toboolean(config.mssJitterFix)
-		if config.mssJitterFix == nil then
-			log("LOG_ERR", "Invalid mssJitterFix config value specified for " .. interface)
+	if config.stableTime then
+		config.stableTime = tonumber(config.stableTime)
+		if not config.stableTime or config.stableTime <= 0 then
+			log("LOG_ERR", "Invalid stableTime config value specified for " .. interface)
 			os.exit()
 		else
-			mssJitterFix = config.mssJitterFix
+			stableTime = config.stableTime
 		end
 	end
 
-	assuredPeriod = math.ceil(1 / interval)
 	assuredDecreaseResistance = math.exp(math.log(0.5) / (assuredDecreaseStepTime / interval))
 	pingDecreaseResistance = math.exp(math.log(0.5) / (pingDecreaseStepTime / interval))
 	pingIncreaseResistance = math.exp(math.log(0.5) / (pingIncreaseStepTime / interval))
