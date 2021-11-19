@@ -26,8 +26,6 @@ local statusFile
 
 local autorate
 local assuredDecreaseResistance
-local assuredDecreaseStepTime
-local assuredPeriod
 local console
 local dscp
 local hosts
@@ -36,9 +34,7 @@ local iptype
 local logfile
 local mssJitterFix
 local pingDecreaseResistance
-local pingDecreaseStepTime
 local pingIncreaseResistance
-local pingIncreaseStepTime
 local reconnect
 local rtt
 local stableIncreaseResistance
@@ -413,31 +409,6 @@ local function updateQdisc(qdisc)
 	end
 end
 
-local function updatePingStatisticsEWMA()
-	if not ping.baseline then
-		ping.clear = 0
-		ping.baseline = rtt
-	end
-
-	ping.delta = ping.current - ping.baseline
-
-	if ping.current > ping.baseline then
-		ping.baseline = pingIncreaseResistance * ping.baseline + (1 - pingIncreaseResistance) * ping.current
-	elseif ping.current < ping.baseline then
-		ping.baseline = pingDecreaseResistance * ping.baseline + (1 - pingDecreaseResistance) * ping.current
-	end
-
-	ping.limit = ping.baseline + 5
-	ping.ceiling = ping.baseline + 70
-
-	if ping.current > ping.limit then
-		ping.clear = 0
-		return
-	end
-
-	ping.clear = ping.clear + interval
-end
-
 local function updatePingStatistics()
 	if not ping.streamingMedian then
 		ping.clear = 0
@@ -445,11 +416,10 @@ local function updatePingStatistics()
 		streamingMedian(ping.streamingMedian, rtt)
 	end
 
+	ping.delta = ping.current - ping.baseline
 	ping.baseline = streamingMedian(ping.streamingMedian, ping.current, 0.1)
 	ping.limit = ping.baseline + 5
 	ping.ceiling = ping.baseline + 70
-
-	ping.delta = ping.current - ping.baseline
 
 	if ping.current > ping.limit then
 		ping.clear = 0
@@ -563,10 +533,10 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assured = qdisc.bandwidth
 	end
 
-	if qdisc.assured < qdisc.stable or not qdisc.latent then
-		qdisc.stable = qdisc.assured
+	if qdisc.assured * 0.98 < qdisc.stable or not qdisc.latent then
+		qdisc.stable = qdisc.assured * 0.98
 	else
-		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.assured
+		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.assured * 0.98
 	end
 end
 
@@ -917,10 +887,7 @@ local function initialise()
 	end
 
 	mssJitterFix = false
-	assuredDecreaseStepTime = 1
-	pingDecreaseStepTime = 30
-	pingIncreaseStepTime = 110
-	stableIncreaseStepTime = 10
+	stableIncreaseStepTime = 5
 	rtt = 50
 	stableTime = 0.5
 
@@ -938,36 +905,6 @@ local function initialise()
 			os.exit()
 		else
 			mssJitterFix = config.mssJitterFix
-		end
-	end
-
-	if config.assuredDecreaseStepTime then
-		config.assuredDecreaseStepTime = tonumber(config.assuredDecreaseStepTime)
-		if not config.assuredDecreaseStepTime or config.assuredDecreaseStepTime <= 0 then
-			log("LOG_ERR", "Invalid assuredDecreaseStepTime config value specified for " .. interface)
-			os.exit()
-		else
-			assuredDecreaseStepTime = config.assuredDecreaseStepTime
-		end
-	end
-
-	if config.pingDecreaseStepTime then
-		config.pingDecreaseStepTime = tonumber(config.pingDecreaseStepTime)
-		if not config.pingDecreaseStepTime or config.pingDecreaseStepTime <= 0 then
-			log("LOG_ERR", "Invalid pingDecreaseStepTime config value specified for " .. interface)
-			os.exit()
-		else
-			pingDecreaseStepTime = config.pingDecreaseStepTime
-		end
-	end
-
-	if config.pingIncreaseStepTime then
-		config.pingIncreaseStepTime = tonumber(config.pingIncreaseStepTime)
-		if not config.pingIncreaseStepTime or config.pingIncreaseStepTime <= 0 then
-			log("LOG_ERR", "Invalid pingIncreaseStepTime config value specified for " .. interface)
-			os.exit()
-		else
-			pingIncreaseStepTime = config.pingIncreaseStepTime
 		end
 	end
 
@@ -1001,9 +938,6 @@ local function initialise()
 		end
 	end
 
-	assuredDecreaseResistance = math.exp(math.log(0.5) / (assuredDecreaseStepTime / interval))
-	pingDecreaseResistance = math.exp(math.log(0.5) / (pingDecreaseStepTime / interval))
-	pingIncreaseResistance = math.exp(math.log(0.5) / (pingIncreaseStepTime / interval))
 	stableIncreaseResistance = math.exp(math.log(0.5) / (stableIncreaseStepTime / interval))
 end
 
