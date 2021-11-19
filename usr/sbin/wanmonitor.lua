@@ -25,7 +25,6 @@ local ping
 local statusFile
 
 local autorate
-local assuredDecreaseResistance
 local assuredDecreaseStepTime
 local console
 local dscp
@@ -34,8 +33,6 @@ local interval
 local iptype
 local logfile
 local mssJitterFix
-local pingDecreaseResistance
-local pingIncreaseResistance
 local reconnect
 local rtt
 local stableIncreaseResistance
@@ -52,6 +49,10 @@ local previousTxBytes
 local responseCount
 local retries
 local retriesRemaining
+
+if not table.unpack then
+	table.unpack = unpack
+end
 
 local function log(priority, message)
 	syslog.openlog("wanmonitor", syslog.LOG_PID, syslog.LOG_DAEMON)
@@ -357,13 +358,25 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.assured)
 		.. ";"
-		.. string.format("%.2f", ingressDecreaseChance)
+		.. string.format(
+			"%.2f",
+			ingressDecreaseChance
+		)
 		.. ";	"
-		.. string.format("%.2f", ingressStableComparision)
+		.. string.format(
+			"%.2f",
+			ingressStableComparision
+		)
 		.. ";"
-		.. string.format("%.2f", egressStableComparision)
+		.. string.format(
+			"%.2f",
+			egressStableComparision
+		)
 		.. ";	"
-		.. string.format("%.2f", egressDecreaseChance)
+		.. string.format(
+			"%.2f",
+			egressDecreaseChance
+		)
 		.. ";"
 
 	if console then
@@ -451,10 +464,6 @@ local function updateRateStatistics(qdisc)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
-	if not qdisc.stable then
-		qdisc.stable = qdisc.bandwidth * 0.01 * 0.75 + qdisc.rate * 0.25
-	end
-
 	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
 		qdisc.stableComparision = nil
 		qdisc.decreaseChance = nil
@@ -510,40 +519,31 @@ end
 
 local function calculateAssuredRate(qdisc)
 	if not qdisc.assuredProportion then
+		qdisc.stable = qdisc.bandwidth * 0.01 * 0.75 + qdisc.rate * 0.25
 		qdisc.assuredProportion = 1
+		qdisc.assuredSample = {}
 	end
-	if qdisc.decreaseChance then
-		if not qdisc.latent then
-			qdisc.assuredSample = {}
-			qdisc.latent = true
-		end
+
+	if ping.current > ping.limit and qdisc.rate > qdisc.stable then
+		qdisc.latent = true
 		if qdisc.assuredProportion > 0.6 + interval * 0.1 then
 			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
 		end
 	else
+		qdisc.latent = nil
 		if qdisc.assuredProportion < 1 and ping.current < ping.limit then
 			qdisc.assuredProportion = qdisc.assuredProportion + interval * 0.1
 		end
-		qdisc.assuredSample = nil
-		qdisc.latent = nil
 	end
 
-	if qdisc.latent then
-		updateSample(qdisc.assuredSample, qdisc.rate, 2)
-		qdisc.assured = mean(qdisc.assuredSample) * qdisc.assuredProportion
-	elseif not qdisc.assured or qdisc.rate * qdisc.assuredProportion > qdisc.assured then
-		qdisc.assured = qdisc.rate * qdisc.assuredProportion
-	else
-		qdisc.assured = assuredDecreaseResistance * qdisc.assured
-			+ (1 - assuredDecreaseResistance) * qdisc.rate * qdisc.assuredProportion
-	end
-
+	updateSample(qdisc.assuredSample, qdisc.rate, 2 / interval)
+	qdisc.assured = math.max(table.unpack(qdisc.assuredSample)) * qdisc.assuredProportion
 	if qdisc.assured > qdisc.bandwidth then
 		qdisc.assured = qdisc.bandwidth
 	end
 
-	if qdisc.assured * 0.98 < qdisc.stable or not qdisc.latent then
-		qdisc.stable = qdisc.assured * 0.98
+	if qdisc.assured < qdisc.stable or not qdisc.latent then
+		qdisc.stable = qdisc.assured
 	else
 		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.assured * 0.98
 	end
@@ -609,13 +609,13 @@ local function adjustSqm()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
+	calculateAssuredRate(egress)
+	calculateAssuredRate(ingress)
+
 	calculateDecreaseChance(egress, ingress)
 	calculateDecreaseChance(ingress, egress)
 	adjustDecreaseChance(egress, ingress)
 	adjustDecreaseChance(ingress, egress)
-
-	calculateAssuredRate(egress)
-	calculateAssuredRate(ingress)
 
 	calculateChange(egress)
 	calculateChange(ingress)
@@ -650,7 +650,7 @@ local function statisticsInterval()
 	previousEpoch = intervalEpoch
 
 	if #ping.times > 0 then
-		ping.current = math.min(unpack(ping.times))
+		ping.current = math.min(table.unpack(ping.times))
 	else
 		ping.current = interval * 1000
 		if ingress.rate == 0 then
@@ -895,7 +895,7 @@ local function initialise()
 	end
 
 	mssJitterFix = false
-	assuredDecreaseStepTime = 0.25
+	assuredDecreaseStepTime = 0.1
 	stableIncreaseStepTime = 5
 	rtt = 50
 	stableTime = 0.5
