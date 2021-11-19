@@ -359,26 +359,6 @@ local function adjustmentLog()
 		.. string.format("%.2f", ingress.assured)
 		.. ";	"
 		.. string.format("%.2f", egress.assured)
-		.. ";	"
-		.. string.format(
-			"%.2f",
-			ingressStableComparision
-		)
-		.. ";	"
-		.. string.format(
-			"%.2f",
-			ingressDecreaseChance
-		)
-		.. ";	"
-		.. string.format(
-			"%.2f",
-			egressStableComparision
-		)
-		.. ";	"
-		.. string.format(
-			"%.2f",
-			egressDecreaseChance
-		)
 		.. ";"
 
 	if console then
