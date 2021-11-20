@@ -441,7 +441,7 @@ local function updatePingStatistics()
 		ping.baseline = 50
 		ping.clear = 0
 		ping.median = rtt
-		ping.step = 2
+		ping.step = 0.5
 	end
 
 	ping.delta = ping.current - ping.baseline
