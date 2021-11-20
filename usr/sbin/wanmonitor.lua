@@ -477,17 +477,15 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assuredSample = {}
 	end
 
-	if qdisc.rate > qdisc.bandwidth then
-		updateSample(qdisc.assuredSample, qdisc.bandwidth, 5 / interval)
-	else
-		updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
-	end
-
+	updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
 	qdisc.assured = mean(qdisc.assuredSample) * qdisc.assuredProportion
+
 	if not qdisc.stable then
 		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
 	elseif not qdisc.latent then
 		qdisc.stable = qdisc.assured
+	else
+		qdisc.stable = math.min(table.unpack(qdisc.assuredSample))
 	end
 end
 
