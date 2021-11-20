@@ -452,10 +452,43 @@ local function updateRateStatistics(qdisc)
 	end
 end
 
-local function calculateDecreaseChance(qdisc, compared)
-	if not qdisc.stable then
-		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
+local function calculateAssuredRate(qdisc)
+	if not qdisc.assuredProportion then
+		qdisc.assuredProportion = 1
+		qdisc.assuredSample = {}
+		qdisc.assuredSample[1] = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
 	end
+
+	if ping.current > ping.limit then
+		if qdisc.assuredProportion > 0.6 then
+			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
+		end
+		qdisc.latent = true
+	else
+		if qdisc.latent then
+			local assured = math.min(qdisc.bandwidth, math.max(qdisc.assured, qdisc.rate))
+			for i = #qdisc.assuredSample, 1, -1 do
+				if qdisc.assuredSample[i] > assured then
+					table.remove(qdisc.assuredSample, i)
+				end
+			end
+			table.insert(qdisc.assuredSample, assured)
+		end
+		qdisc.assuredProportion = 1
+		qdisc.latent = nil
+	end
+
+	if qdisc.rate > qdisc.bandwidth then
+		updateSample(qdisc.assuredSample, qdisc.bandwidth, 5 / interval)
+	else
+		updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
+	end
+
+	qdisc.assured = math.max(table.unpack(qdisc.assuredSample)) * qdisc.assuredProportion
+	qdisc.stable = qdisc.assured
+end
+
+local function calculateDecreaseChance(qdisc, compared)
 	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
 		qdisc.stableComparision = nil
 		qdisc.decreaseChance = nil
@@ -506,47 +539,6 @@ local function adjustDecreaseChance(qdisc, compared)
 	end
 	if qdisc.decreaseChance < 0.001 then
 		qdisc.decreaseChance = nil
-	end
-end
-
-local function calculateAssuredRate(qdisc)
-	if not qdisc.assuredProportion then
-		qdisc.assuredProportion = 1
-		qdisc.assuredSample = {}
-		qdisc.assuredSample[1] = qdisc.bandwidth * 0.01
-	end
-
-	if ping.current > ping.limit then
-		if qdisc.assuredProportion > 0.6 then
-			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
-		end
-		qdisc.latent = true
-	else
-		if qdisc.latent then
-			local assured = math.min(qdisc.bandwidth, math.max(qdisc.assured, qdisc.rate))
-			for i = #qdisc.assuredSample, 1, -1 do
-				if qdisc.assuredSample[i] > assured then
-					table.remove(qdisc.assuredSample, i)
-				end
-			end
-			table.insert(qdisc.assuredSample, assured)
-		end
-		if ping.clear > stableTime then
-			qdisc.assuredProportion = 1
-		end
-		qdisc.latent = nil
-	end
-
-	if qdisc.latent and qdisc.rate > qdisc.bandwidth then
-		updateSample(qdisc.assuredSample, qdisc.bandwidth, 5 / interval)
-	else
-		updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
-	end
-
-	qdisc.assured = math.max(table.unpack(qdisc.assuredSample)) * qdisc.assuredProportion
-
-	if qdisc.assured < qdisc.stable or not qdisc.latent then
-		qdisc.stable = qdisc.assured
 	end
 end
 
