@@ -523,7 +523,7 @@ local function calculateAssuredRate(qdisc)
 		qdisc.latent = true
 	else
 		if qdisc.latent then
-			local assured = math.min(qdisc.assured, qdisc.bandwidth)
+			local assured = math.min(qdisc.bandwidth, math.max(qdisc.assured, qdisc.rate))
 			for i = #qdisc.assuredSample, 1, -1 do
 				if qdisc.assuredSample[i] > assured then
 					table.remove(qdisc.assuredSample, i)
