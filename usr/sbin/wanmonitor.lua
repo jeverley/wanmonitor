@@ -475,11 +475,6 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assuredSample = {}
 	end
 
-	if not qdisc.latent and qdisc.assuredSample[1] and qdisc.rate > math.max(table.unpack(qdisc.assuredSample)) then
-		qdisc.assuredSample = {}
-		qdisc.assuredSample[1] = qdisc.assured
-	end
-
 	if ping.current > ping.limit then
 		if qdisc.assuredProportion >= 0 + interval * 0.1 then
 			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
@@ -496,7 +491,7 @@ local function calculateAssuredRate(qdisc)
 				table.remove(qdisc.assuredSample, i)
 			end
 		end
-		qdisc.assuredProportion = 1
+		qdisc.assuredProportion = 1 - interval * 0.1
 		table.insert(qdisc.assuredSample, qdisc.bandwidth)
 	end
 
@@ -1046,4 +1041,3 @@ local function main()
 end
 
 main()
- 
