@@ -479,7 +479,7 @@ local function calculateAssuredRate(qdisc)
 		if not qdisc.latent and qdisc.assuredSample[1] then
 			local previousMax = math.max(table.unpack(qdisc.assuredSample))
 			qdisc.assuredSample = {}
-			qdisc.assuredProportion[1] = previousMax
+			qdisc.assuredSample[1] = previousMax
 		end
 		if qdisc.assuredProportion >= 0 + interval * 0.1 then
 			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
