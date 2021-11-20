@@ -25,7 +25,6 @@ local ping
 local statusFile
 
 local autorate
-local assuredDecreaseStepTime
 local console
 local dscp
 local hosts
@@ -35,6 +34,8 @@ local logfile
 local mssJitterFix
 local reconnect
 local rtt
+local stableDecreaseResistance
+local stableDecreaseStepTime
 local stableIncreaseResistance
 local stableIncreaseStepTime
 local stableTime
@@ -98,15 +99,28 @@ local function sum(values)
 	return total
 end
 
-local function mean(sample)
-	return sum(sample) / #sample
-end
-
 local function updateSample(sample, observation, period)
 	table.insert(sample, observation)
 	while #sample > period do
 		table.remove(sample, 1)
 	end
+end
+
+local function mean(sample)
+	return sum(sample) / #sample
+end
+
+local function median(values)
+	local sorted = {}
+	for i = 1, #values do
+		table.insert(sorted, values[i])
+	end
+	table.sort(sorted)
+	local middle = #sorted * 0.5
+	if #sorted % 2 == 0 then
+		return (sorted[middle] + sorted[middle + 1]) * 0.5
+	end
+	return sorted[middle + 0.5]
 end
 
 local function streamingMedian(persist, observation, minimumStep)
@@ -268,7 +282,6 @@ local function mssClamp(qdisc)
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
 		os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
 		os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
-		log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to 540")
 		qdisc.mssJitterFix = true
 	elseif qdisc.bandwidth >= 3000 and qdisc.mssJitterFix ~= false then
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
@@ -277,7 +290,6 @@ local function mssClamp(qdisc)
 		if wan and toboolean(wan.mtu_fix) == true then
 			os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
 			os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
-			log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to PMTU")
 		end
 		qdisc.mssJitterFix = false
 	end
@@ -312,7 +324,6 @@ local function adjustmentLog()
 
 	local ingressUtilisation = ingress.utilisation
 	local ingressBandwidth = 0
-	local ingressStableComparision = 0
 	local ingressDecreaseChance = 0
 	if ingress.bandwidth then
 		ingressBandwidth = ingress.bandwidth
@@ -323,7 +334,6 @@ local function adjustmentLog()
 
 	local egressUtilisation = egress.utilisation
 	local egressBandwidth = 0
-	local egressStableComparision = 0
 	local egressDecreaseChance = 0
 	if egress.bandwidth then
 		egressBandwidth = egress.bandwidth
@@ -355,6 +365,13 @@ local function adjustmentLog()
 		.. string.format("%.2f", ingress.assured)
 		.. ";	"
 		.. string.format("%.2f", egress.assured)
+		.. ";	"
+		.. string.format("%.2f", ingress.stable)
+		.. ";	"
+		.. string.format(
+			"%.2f",
+			egress.stable
+		)
 		.. ";	"
 		.. string.format(
 			"%.2f",
@@ -452,10 +469,65 @@ local function updateRateStatistics(qdisc)
 	end
 end
 
+local function calculateAssuredRate(qdisc)
+	if not qdisc.assuredProportion then
+		qdisc.assuredProportion = 1
+		qdisc.assuredSample = {}
+	end
+
+	if not qdisc.latent and qdisc.assuredSample[1] and qdisc.rate > math.max(table.unpack(qdisc.assuredSample)) then
+		qdisc.assuredSample = {}
+		qdisc.assuredSample[1] = qdisc.assured
+	end
+
+	if ping.current > ping.limit then
+		if qdisc.assuredProportion >= 0 + interval * 0.1 then
+			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
+		end
+		qdisc.latent = true
+	else
+		qdisc.assuredProportion = 1
+		qdisc.latent = nil
+	end
+
+	if qdisc.latent and qdisc.assuredSample[1] and math.max(table.unpack(qdisc.assuredSample)) > qdisc.bandwidth then
+		for i = #qdisc.assuredSample, 1, -1 do
+			if qdisc.assuredSample[i] > qdisc.bandwidth then
+				table.remove(qdisc.assuredSample, i)
+			end
+		end
+		qdisc.assuredProportion = 1
+		table.insert(qdisc.assuredSample, qdisc.bandwidth)
+	end
+
+	updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
+	local assuredMin = math.min(table.unpack(qdisc.assuredSample))
+	local assuredMax = math.max(table.unpack(qdisc.assuredSample))
+	qdisc.assured = assuredMin * (1 - qdisc.assuredProportion) + assuredMax * qdisc.assuredProportion
+end
+
+local function calculateStableRate(qdisc)
+	if not qdisc.stable then
+		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
+	end
+
+	if ping.current < ping.limit and qdisc.rate > qdisc.stable then
+		qdisc.stable = qdisc.rate
+		return
+	end
+
+	if qdisc.rate > qdisc.stable then
+		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.rate
+	elseif ping.current < qdisc.stable then
+		qdisc.stable = stableDecreaseResistance * qdisc.stable + (1 - stableDecreaseResistance) * qdisc.rate
+	end
+end
+
 local function calculateDecreaseChance(qdisc, compared)
 	if not qdisc.stable then
 		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
 	end
+
 	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
 		qdisc.stableComparision = nil
 		qdisc.decreaseChance = nil
@@ -466,8 +538,12 @@ local function calculateDecreaseChance(qdisc, compared)
 	qdisc.stableComparision = (qdisc.rate - qdisc.stable) / qdisc.stable
 	qdisc.decreaseChanceReducer = 1
 
-	if compared.utilisation and compared.utilisation > 1 then
+	if compared.utilisation and compared.utilisation > 1.111 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.7 / compared.utilisation
+	end
+
+	if compared.utilisation < 0.9 and qdisc.utilisation > 0.9 then
+		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 1.2
 	end
 
 	if
@@ -487,7 +563,7 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
-	local amplify = 5
+	local amplify = 7
 	if not compared.decreaseChance then
 		if qdisc.decreaseChance > 1 then
 			qdisc.decreaseChance = 1
@@ -506,47 +582,6 @@ local function adjustDecreaseChance(qdisc, compared)
 	end
 	if qdisc.decreaseChance < 0.001 then
 		qdisc.decreaseChance = nil
-	end
-end
-
-local function calculateAssuredRate(qdisc)
-	if not qdisc.assuredProportion then
-		qdisc.assuredProportion = 1
-		qdisc.assuredSample = {}
-		qdisc.assuredSample[1] = qdisc.bandwidth * 0.01
-	end
-
-	if ping.current > ping.limit then
-		if qdisc.assuredProportion > 0.6 then
-			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
-		end
-		qdisc.latent = true
-	else
-		if qdisc.latent then
-			local assured = math.min(qdisc.assured, qdisc.bandwidth)
-			for i = #qdisc.assuredSample, 1, -1 do
-				if qdisc.assuredSample[i] > assured then
-					table.remove(qdisc.assuredSample, i)
-				end
-			end
-			table.insert(qdisc.assuredSample, assured)
-		end
-		if ping.clear > stableTime then
-			qdisc.assuredProportion = 1
-		end
-		qdisc.latent = nil
-	end
-
-	if qdisc.latent and qdisc.rate > qdisc.bandwidth then
-		updateSample(qdisc.assuredSample, qdisc.bandwidth, 5 / interval)
-	else
-		updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
-	end
-
-	qdisc.assured = math.max(table.unpack(qdisc.assuredSample)) * qdisc.assuredProportion
-
-	if qdisc.assured < qdisc.stable or not qdisc.latent then
-		qdisc.stable = qdisc.assured
 	end
 end
 
@@ -611,6 +646,9 @@ local function adjustSqm()
 	updatePingStatistics()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
+
+	calculateStableRate(egress)
+	calculateStableRate(ingress)
 
 	calculateDecreaseChance(egress, ingress)
 	calculateDecreaseChance(ingress, egress)
@@ -905,8 +943,8 @@ local function initialise()
 	end
 
 	mssJitterFix = false
-	assuredDecreaseStepTime = 0.1
-	stableIncreaseStepTime = 5
+	stableDecreaseStepTime = 10
+	stableIncreaseStepTime = 60
 	rtt = 50
 	stableTime = 0.5
 
@@ -967,7 +1005,7 @@ local function initialise()
 		end
 	end
 
-	assuredDecreaseResistance = math.exp(math.log(0.5) / (assuredDecreaseStepTime / interval))
+	stableDecreaseResistance = math.exp(math.log(0.5) / (stableDecreaseStepTime / interval))
 	stableIncreaseResistance = math.exp(math.log(0.5) / (stableIncreaseStepTime / interval))
 end
 
@@ -1015,3 +1053,4 @@ local function main()
 end
 
 main()
+ 
