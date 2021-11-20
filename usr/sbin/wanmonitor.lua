@@ -506,7 +506,7 @@ local function calculateStableRate(qdisc)
 		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
 	end
 
-	if ping.current < ping.limit and qdisc.rate > qdisc.stable then
+	if ping.current < ping.baseline and qdisc.rate > qdisc.stable then
 		qdisc.stable = qdisc.rate
 		return
 	end
