@@ -500,7 +500,7 @@ local function calculateAssuredRate(qdisc)
 	if not qdisc.stable then
 		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
 	else
-		qdisc.stable = assuredMin * 0.95 * (1 - 0.2) + median(qdisc.assuredSample) * 0.2
+		qdisc.stable = assuredMin * 0.95 * (1 - 0.25) + median(qdisc.assuredSample) * 0.25
 	end
 end
 
