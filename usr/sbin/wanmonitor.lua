@@ -475,6 +475,7 @@ local function calculateAssuredRate(qdisc)
 				table.remove(qdisc.assuredSample, i)
 			end
 		end
+		qdisc.assuredProportion = 1
 		table.insert(qdisc.assuredSample, qdisc.bandwidth)
 	end
 
@@ -488,7 +489,7 @@ local function calculateAssuredRate(qdisc)
 	elseif not qdisc.latent then
 		qdisc.stable = qdisc.assured
 	else
-		qdisc.stable = assuredMin
+		qdisc.stable = assuredMin * (1 - 0.1) + assuredMax * 0.1
 	end
 end
 
@@ -524,7 +525,7 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
-	local amplify = 5
+	local amplify = 7
 	if not compared.decreaseChance then
 		if qdisc.decreaseChance > 1 then
 			qdisc.decreaseChance = 1
