@@ -486,11 +486,7 @@ local function calculateAssuredRate(qdisc)
 	qdisc.assured = mean(qdisc.assuredSample) * qdisc.assuredProportion
 	if not qdisc.stable then
 		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
-	elseif
-		not qdisc.stable
-		or qdisc.latent and qdisc.assured > qdisc.stable
-		or not qdisc.latent and qdisc.assured < qdisc.stable
-	then
+	elseif not qdisc.latent then
 		qdisc.stable = qdisc.assured
 	end
 end
@@ -611,13 +607,13 @@ local function adjustSqm()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
+	calculateAssuredRate(egress)
+	calculateAssuredRate(ingress)
+
 	calculateDecreaseChance(egress, ingress)
 	calculateDecreaseChance(ingress, egress)
 	adjustDecreaseChance(egress, ingress)
 	adjustDecreaseChance(ingress, egress)
-
-	calculateAssuredRate(egress)
-	calculateAssuredRate(ingress)
 
 	calculateChange(egress)
 	calculateChange(ingress)
