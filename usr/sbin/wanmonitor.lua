@@ -360,14 +360,14 @@ local function adjustmentLog()
 		.. ";"
 		.. string.format(
 			"%.2f",
-			ingressDecreaseChance
-		)
-		.. ";	"
-		.. string.format(
-			"%.2f",
 			ingressStableComparision
 		)
 		.. ";"
+		.. string.format(
+			"%.2f",
+			ingressDecreaseChance
+		)
+		.. ";	"
 		.. string.format(
 			"%.2f",
 			egressStableComparision
@@ -432,14 +432,15 @@ local function updateQdisc(qdisc)
 end
 
 local function updatePingStatistics()
-	if not ping.streamingMedian then
+	if not ping.baseline then
+		ping.baseline = 50
 		ping.clear = 0
-		ping.streamingMedian = {}
-		ping.baseline = streamingMedian(ping.streamingMedian, rtt)
+		ping.median = rtt
+		ping.step = 2
 	end
 
 	ping.delta = ping.current - ping.baseline
-	ping.baseline = streamingMedian(ping.streamingMedian, ping.current, 0.1)
+	ping.baseline = streamingMedian(ping, ping.current, 0.1)
 	ping.limit = ping.baseline + 5
 	ping.ceiling = ping.baseline + 70
 
@@ -463,7 +464,48 @@ local function updateRateStatistics(qdisc)
 	end
 end
 
+local function calculateAssuredRate(qdisc)
+	if not qdisc.assuredProportion then
+		qdisc.assuredProportion = 1
+		qdisc.assuredSample = {}
+	end
+
+	if ping.current > ping.limit then
+		if qdisc.assuredProportion > 0.6 then
+			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
+		end
+		qdisc.latent = true
+	else
+		if qdisc.latent then
+			local assured = math.min(qdisc.assured, qdisc.bandwidth)
+			for i = #qdisc.assuredSample, 1, -1 do
+				if qdisc.assuredSample[i] > assured then
+					table.remove(qdisc.assuredSample, i)
+				end
+			end
+			table.insert(qdisc.assuredSample, assured)
+		end
+		qdisc.assuredProportion = 1
+		qdisc.latent = nil
+	end
+
+	if qdisc.latent and qdisc.rate > qdisc.bandwidth then
+		updateSample(qdisc.assuredSample, qdisc.bandwidth, 5 / interval)
+	else
+		updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
+	end
+
+	qdisc.assured = math.max(table.unpack(qdisc.assuredSample)) * qdisc.assuredProportion
+
+	if qdisc.assured < qdisc.stable or not qdisc.latent then
+		qdisc.stable = qdisc.assured
+	end
+end
+
 local function calculateDecreaseChance(qdisc, compared)
+	if not qdisc.stable then
+		qdisc.stable = qdisc.rate * 0.8
+	end
 	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
 		qdisc.stableComparision = nil
 		qdisc.decreaseChance = nil
@@ -517,41 +559,9 @@ local function adjustDecreaseChance(qdisc, compared)
 	end
 end
 
-local function calculateAssuredRate(qdisc)
-	if not qdisc.assuredProportion then
-		qdisc.stable = qdisc.bandwidth * 0.01 * 0.75 + qdisc.rate * 0.25
-		qdisc.assuredProportion = 1
-		qdisc.assuredSample = {}
-	end
-
-	if ping.current > ping.limit and qdisc.rate > qdisc.stable then
-		qdisc.latent = true
-		if qdisc.assuredProportion > 0.6 + interval * 0.1 then
-			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
-		end
-	else
-		qdisc.latent = nil
-		if qdisc.assuredProportion < 1 and ping.current < ping.limit then
-			qdisc.assuredProportion = qdisc.assuredProportion + interval * 0.1
-		end
-	end
-
-	updateSample(qdisc.assuredSample, qdisc.rate, 2 / interval)
-	qdisc.assured = math.max(table.unpack(qdisc.assuredSample)) * qdisc.assuredProportion
-	if qdisc.assured > qdisc.bandwidth then
-		qdisc.assured = qdisc.bandwidth
-	end
-
-	if qdisc.assured < qdisc.stable or not qdisc.latent then
-		qdisc.stable = qdisc.assured
-	else
-		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.assured * 0.98
-	end
-end
-
 local function calculateDecrease(qdisc)
 	if ping.current < ping.ceiling then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 1.5
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 2
 	else
 		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.6
 	end
@@ -567,7 +577,9 @@ local function calculateIncrease(qdisc)
 	if targetMultiplier < 1 then
 		targetMultiplier = targetMultiplier ^ 15
 	end
-	qdisc.change = qdisc.bandwidth * 0.05 * targetMultiplier
+	local idleMultiplier = 1 - qdisc.utilisation * 0.5
+
+	qdisc.change = qdisc.bandwidth * 0.05 * targetMultiplier * idleMultiplier
 
 	if qdisc.change < 0.008 then
 		qdisc.change = 0
@@ -609,13 +621,13 @@ local function adjustSqm()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
-	calculateAssuredRate(egress)
-	calculateAssuredRate(ingress)
-
 	calculateDecreaseChance(egress, ingress)
 	calculateDecreaseChance(ingress, egress)
 	adjustDecreaseChance(egress, ingress)
 	adjustDecreaseChance(ingress, egress)
+
+	calculateAssuredRate(egress)
+	calculateAssuredRate(ingress)
 
 	calculateChange(egress)
 	calculateChange(ingress)
