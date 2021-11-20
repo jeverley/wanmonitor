@@ -484,6 +484,9 @@ local function calculateAssuredRate(qdisc)
 		end
 		qdisc.latent = true
 	else
+		if ping.clear > stableTime and qdisc.assuredProportion < 1 then
+			qdisc.assuredProportion = qdisc.assuredProportion + interval * 0.1
+		end
 		qdisc.latent = nil
 	end
 
@@ -534,8 +537,8 @@ local function calculateDecreaseChance(qdisc, compared)
 	qdisc.stableComparision = (qdisc.rate - qdisc.stable) / qdisc.stable
 	qdisc.decreaseChanceReducer = 1
 
-	if compared.utilisation and compared.utilisation > 1.111 then
-		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.7 / compared.utilisation
+	if compared.utilisation and compared.utilisation > 1.111 and qdisc.utilisation < 1 then
+		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * qdisc.utilisation / compared.utilisation
 	end
 
 	if compared.utilisation < 0.9 and qdisc.utilisation > 0.9 then
