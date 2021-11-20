@@ -8,9 +8,6 @@ Command line arguments:
 	optional	-l	(--log)			Write intervals to log file path
 ]]
 
-print("pending defect fix")
-os.exit()
-
 local jsonc = require("luci.jsonc")
 local signal = require("posix.signal")
 local syslog = require("posix.syslog")
@@ -271,7 +268,6 @@ local function mssClamp(qdisc)
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
 		os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
 		os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
-		log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to 540")
 		qdisc.mssJitterFix = true
 	elseif qdisc.bandwidth >= 3000 and qdisc.mssJitterFix ~= false then
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
@@ -280,7 +276,6 @@ local function mssClamp(qdisc)
 		if wan and toboolean(wan.mtu_fix) == true then
 			os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
 			os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
-			log("LOG_INFO", interface .. " " .. direction .. " MSS clamped to PMTU")
 		end
 		qdisc.mssJitterFix = false
 	end
@@ -315,7 +310,6 @@ local function adjustmentLog()
 
 	local ingressUtilisation = ingress.utilisation
 	local ingressBandwidth = 0
-	local ingressStableComparision = 0
 	local ingressDecreaseChance = 0
 	if ingress.bandwidth then
 		ingressBandwidth = ingress.bandwidth
@@ -326,7 +320,6 @@ local function adjustmentLog()
 
 	local egressUtilisation = egress.utilisation
 	local egressBandwidth = 0
-	local egressStableComparision = 0
 	local egressDecreaseChance = 0
 	if egress.bandwidth then
 		egressBandwidth = egress.bandwidth
@@ -459,7 +452,6 @@ local function calculateAssuredRate(qdisc)
 	if not qdisc.assuredProportion then
 		qdisc.assuredProportion = 1
 		qdisc.assuredSample = {}
-		qdisc.assuredSample[1] = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
 	end
 
 	if ping.current > ping.limit then
@@ -481,14 +473,26 @@ local function calculateAssuredRate(qdisc)
 		qdisc.latent = nil
 	end
 
+	if qdisc.assuredSample[1] and qdisc.rate > math.max(table.unpack(qdisc.assuredSample)) then
+		qdisc.assuredSample = {}
+	end
+
 	if qdisc.rate > qdisc.bandwidth then
 		updateSample(qdisc.assuredSample, qdisc.bandwidth, 5 / interval)
 	else
 		updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
 	end
 
-	qdisc.assured = math.max(table.unpack(qdisc.assuredSample)) * qdisc.assuredProportion
-	qdisc.stable = qdisc.assured
+	qdisc.assured = mean(qdisc.assuredSample) * qdisc.assuredProportion
+	if not qdisc.stable then
+		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
+	elseif
+		not qdisc.stable
+		or qdisc.latent and qdisc.assured > qdisc.stable
+		or not qdisc.latent and qdisc.assured < qdisc.stable
+	then
+		qdisc.stable = qdisc.assured
+	end
 end
 
 local function calculateDecreaseChance(qdisc, compared)
