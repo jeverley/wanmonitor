@@ -456,6 +456,7 @@ local function calculateAssuredRate(qdisc)
 
 	if not qdisc.latent and qdisc.assuredSample[1] and qdisc.rate > math.max(table.unpack(qdisc.assuredSample)) then
 		qdisc.assuredSample = {}
+		qdisc.assuredSample[1] = qdisc.assured
 	end
 
 	if ping.current > ping.limit then
