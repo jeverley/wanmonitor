@@ -25,7 +25,6 @@ local ping
 local statusFile
 
 local autorate
-local assuredDecreaseStepTime
 local console
 local dscp
 local hosts
@@ -35,6 +34,8 @@ local logfile
 local mssJitterFix
 local reconnect
 local rtt
+local stableDecreaseResistance
+local stableDecreaseStepTime
 local stableIncreaseResistance
 local stableIncreaseStepTime
 local stableTime
@@ -479,7 +480,7 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assuredSample[1] = qdisc.assured
 	end
 
-	if ping.current >= ping.limit then
+	if ping.current > ping.limit then
 		if qdisc.assuredProportion >= 0 + interval * 0.1 then
 			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
 		end
@@ -502,9 +503,24 @@ local function calculateAssuredRate(qdisc)
 	updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
 	local assuredMin = math.min(table.unpack(qdisc.assuredSample))
 	local assuredMax = math.max(table.unpack(qdisc.assuredSample))
-
 	qdisc.assured = assuredMin * (1 - qdisc.assuredProportion) + assuredMax * qdisc.assuredProportion
-	qdisc.stable = assuredMin * 0.99 * (1 - 0.5) + median(qdisc.assuredSample) * 0.5
+end
+
+local function calculateStableRate(qdisc)
+	if not qdisc.stable then
+		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
+	end
+
+	if ping.current < ping.limit and qdisc.rate > qdisc.stable then
+		qdisc.stable = qdisc.rate
+		return
+	end
+
+	if qdisc.rate > qdisc.stable then
+		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.rate
+	elseif ping.current < qdisc.stable then
+		qdisc.stable = stableDecreaseResistance * qdisc.stable + (1 - stableDecreaseResistance) * qdisc.rate
+	end
 end
 
 local function calculateDecreaseChance(qdisc, compared)
@@ -630,6 +646,9 @@ local function adjustSqm()
 	updatePingStatistics()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
+
+	calculateStableRate(egress)
+	calculateStableRate(ingress)
 
 	calculateDecreaseChance(egress, ingress)
 	calculateDecreaseChance(ingress, egress)
@@ -917,8 +936,8 @@ local function initialise()
 	end
 
 	mssJitterFix = false
-	assuredDecreaseStepTime = 0.1
-	stableIncreaseStepTime = 5
+	stableDecreaseStepTime = 10
+	stableIncreaseStepTime = 60
 	rtt = 50
 	stableTime = 0.5
 
@@ -979,7 +998,7 @@ local function initialise()
 		end
 	end
 
-	assuredDecreaseResistance = math.exp(math.log(0.5) / (assuredDecreaseStepTime / interval))
+	stableDecreaseResistance = math.exp(math.log(0.5) / (stableDecreaseStepTime / interval))
 	stableIncreaseResistance = math.exp(math.log(0.5) / (stableIncreaseStepTime / interval))
 end
 
