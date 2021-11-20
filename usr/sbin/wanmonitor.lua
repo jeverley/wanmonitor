@@ -98,15 +98,28 @@ local function sum(values)
 	return total
 end
 
-local function mean(sample)
-	return sum(sample) / #sample
-end
-
 local function updateSample(sample, observation, period)
 	table.insert(sample, observation)
 	while #sample > period do
 		table.remove(sample, 1)
 	end
+end
+
+local function mean(sample)
+	return sum(sample) / #sample
+end
+
+local function median(values)
+	local sorted = {}
+	for i = 1, #values do
+		table.insert(sorted, values[i])
+	end
+	table.sort(sorted)
+	local middle = #sorted * 0.5
+	if #sorted % 2 == 0 then
+		return (sorted[middle] + sorted[middle + 1]) * 0.5
+	end
+	return sorted[middle + 0.5]
 end
 
 local function streamingMedian(persist, observation, minimumStep)
@@ -459,7 +472,7 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assuredSample[1] = qdisc.assured
 	end
 
-	if ping.current > ping.limit then
+	if ping.current >= ping.limit then
 		if qdisc.assuredProportion >= 0 + interval * 0.1 then
 			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
 		end
@@ -479,17 +492,15 @@ local function calculateAssuredRate(qdisc)
 		table.insert(qdisc.assuredSample, qdisc.bandwidth)
 	end
 
-	updateSample(qdisc.assuredSample, qdisc.rate, 2 / interval)
+	updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
 	local assuredMin = math.min(table.unpack(qdisc.assuredSample))
 	local assuredMax = math.max(table.unpack(qdisc.assuredSample))
 	qdisc.assured = assuredMin * (1 - qdisc.assuredProportion) + assuredMax * qdisc.assuredProportion
 
 	if not qdisc.stable then
 		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
-	elseif not qdisc.latent then
-		qdisc.stable = qdisc.assured
 	else
-		qdisc.stable = assuredMin * 0.95 * (1 - 0.2) + assuredMax * 0.2
+		qdisc.stable = assuredMin * 0.95 * (1 - 0.2) + median(qdisc.assuredSample) * 0.2
 	end
 end
 
