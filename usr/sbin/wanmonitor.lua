@@ -476,16 +476,13 @@ local function calculateAssuredRate(qdisc)
 	end
 
 	if ping.current > ping.limit then
-		if not qdisc.latent then
-			qdisc.assuredSample = {}
-		end
-		if not qdisc.latent and qdisc.assuredProportion >= 0 + interval * 0.1 then
+		if qdisc.assuredProportion >= 0 + interval * 0.1 then
 			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
 		end
 		qdisc.latent = true
 	else
 		if ping.clear > stableTime and qdisc.assuredProportion < 1 then
-			qdisc.assuredProportion = qdisc.assuredProportion + interval * 0.1
+			qdisc.assuredProportion = qdisc.assuredProportion + interval * 0.1 * 0.5
 		end
 		qdisc.latent = nil
 	end
@@ -516,13 +513,11 @@ local function calculateStableRate(qdisc)
 	end
 
 	if qdisc.rate > qdisc.stable then
-		if ping.current > ping.limit then
-			qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.rate * 0.9
-		else
-			qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.rate
-		end
+		qdisc.stable = stableIncreaseResistance * qdisc.stable
+			+ (1 - stableIncreaseResistance) * math.min(qdisc.rate, qdisc.assured)
 	elseif qdisc.rate < qdisc.stable then
-		qdisc.stable = stableDecreaseResistance * qdisc.stable + (1 - stableDecreaseResistance) * qdisc.rate
+		qdisc.stable = stableDecreaseResistance * qdisc.stable
+			+ (1 - stableDecreaseResistance) * math.min(qdisc.rate, qdisc.assured)
 	end
 end
 
