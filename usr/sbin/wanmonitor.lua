@@ -513,7 +513,7 @@ local function calculateStableRate(qdisc)
 
 	if qdisc.rate > qdisc.stable then
 		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.rate
-	elseif ping.rate < qdisc.stable then
+	elseif qdisc.rate < qdisc.stable then
 		qdisc.stable = stableDecreaseResistance * qdisc.stable + (1 - stableDecreaseResistance) * qdisc.rate
 	end
 end
