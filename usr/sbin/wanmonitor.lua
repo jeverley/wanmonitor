@@ -8,6 +8,9 @@ Command line arguments:
 	optional	-l	(--log)			Write intervals to log file path
 ]]
 
+print("pending defect fix")
+os.exit()
+
 local jsonc = require("luci.jsonc")
 local signal = require("posix.signal")
 local syslog = require("posix.syslog")
