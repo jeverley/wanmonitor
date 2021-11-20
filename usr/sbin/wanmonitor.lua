@@ -540,12 +540,12 @@ local function calculateDecreaseChance(qdisc, compared)
 	qdisc.stableComparision = (qdisc.rate - qdisc.stable) / qdisc.stable
 	qdisc.decreaseChanceReducer = 1
 
-	if compared.utilisation and compared.utilisation > 1.111 and qdisc.utilisation < 1 then
+	if compared.utilisation and compared.utilisation > 1 and qdisc.utilisation < 1 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * qdisc.utilisation / compared.utilisation
 	end
 
-	if compared.utilisation < 0.9 and qdisc.utilisation > 0.9 then
-		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 1.2
+	if qdisc.utilisation > 1.111 then
+		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * qdisc.utilisation
 	end
 
 	if compared.rate < compared.stable * 0.7 and compared.rate > compared.stable * 0.6 then
