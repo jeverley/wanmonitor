@@ -476,6 +476,11 @@ local function calculateAssuredRate(qdisc)
 	end
 
 	if ping.current > ping.limit then
+		if not qdisc.latent and qdisc.assuredSample[1] then
+			local previousMax = math.max(table.unpack(qdisc.assuredSample))
+			qdisc.assuredSample = {}
+			qdisc.assuredProportion[1] = previousMax
+		end
 		if qdisc.assuredProportion >= 0 + interval * 0.1 then
 			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
 		end
@@ -512,12 +517,11 @@ local function calculateStableRate(qdisc)
 		return
 	end
 
-	if qdisc.rate > qdisc.stable then
-		qdisc.stable = stableIncreaseResistance * qdisc.stable
-			+ (1 - stableIncreaseResistance) * math.min(qdisc.rate, qdisc.assured)
-	elseif qdisc.rate < qdisc.stable then
-		qdisc.stable = stableDecreaseResistance * qdisc.stable
-			+ (1 - stableDecreaseResistance) * math.min(qdisc.rate, qdisc.assured)
+	local observation = math.min(qdisc.rate, qdisc.assured)
+	if observation > qdisc.stable then
+		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * observation
+	elseif observation < qdisc.stable then
+		qdisc.stable = stableDecreaseResistance * qdisc.stable + (1 - stableDecreaseResistance) * observation
 	end
 end
 
