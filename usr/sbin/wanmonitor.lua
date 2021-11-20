@@ -476,7 +476,10 @@ local function calculateAssuredRate(qdisc)
 	end
 
 	if ping.current > ping.limit then
-		if qdisc.assuredProportion >= 0 + interval * 0.1 then
+		if not qdisc.latent then
+			qdisc.assuredSample = {}
+		end
+		if not qdisc.latent and qdisc.assuredProportion >= 0 + interval * 0.1 then
 			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
 		end
 		qdisc.latent = true
