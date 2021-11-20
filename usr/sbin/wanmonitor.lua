@@ -319,7 +319,6 @@ local function adjustmentLog()
 	end
 	if ingress.decreaseChance then
 		ingressDecreaseChance = ingress.decreaseChance
-		ingressStableComparision = ingress.stableComparision
 	end
 
 	local egressUtilisation = egress.utilisation
@@ -330,7 +329,6 @@ local function adjustmentLog()
 		egressBandwidth = egress.bandwidth
 	end
 	if egress.decreaseChance then
-		egressStableComparision = egress.stableComparision
 		egressDecreaseChance = egress.decreaseChance
 	end
 
@@ -357,20 +355,10 @@ local function adjustmentLog()
 		.. string.format("%.2f", ingress.assured)
 		.. ";	"
 		.. string.format("%.2f", egress.assured)
-		.. ";"
-		.. string.format(
-			"%.2f",
-			ingressStableComparision
-		)
-		.. ";"
-		.. string.format(
-			"%.2f",
-			ingressDecreaseChance
-		)
 		.. ";	"
 		.. string.format(
 			"%.2f",
-			egressStableComparision
+			ingressDecreaseChance
 		)
 		.. ";	"
 		.. string.format(
@@ -466,7 +454,7 @@ end
 
 local function calculateDecreaseChance(qdisc, compared)
 	if not qdisc.stable then
-		qdisc.stable = qdisc.rate * 0.8
+		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
 	end
 	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
 		qdisc.stableComparision = nil
@@ -525,6 +513,7 @@ local function calculateAssuredRate(qdisc)
 	if not qdisc.assuredProportion then
 		qdisc.assuredProportion = 1
 		qdisc.assuredSample = {}
+		qdisc.assuredSample[1] = qdisc.bandwidth * 0.01
 	end
 
 	if ping.current > ping.limit then
@@ -542,7 +531,9 @@ local function calculateAssuredRate(qdisc)
 			end
 			table.insert(qdisc.assuredSample, assured)
 		end
-		qdisc.assuredProportion = 1
+		if ping.clear > stableTime then
+			qdisc.assuredProportion = 1
+		end
 		qdisc.latent = nil
 	end
 
@@ -599,7 +590,7 @@ local function calculateChange(qdisc)
 
 	if
 		ping.clear > stableTime
-		and math.random(1, 100) <= 50 * interval
+		and math.random(1, 100) <= 75 * interval
 		and (qdisc.assured > qdisc.bandwidth * 0.999 or qdisc.utilisation < 0.6)
 	then
 		calculateIncrease(qdisc)
