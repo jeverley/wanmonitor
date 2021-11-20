@@ -931,8 +931,8 @@ local function initialise()
 	end
 
 	mssJitterFix = false
-	stableDecreaseStepTime = 10
-	stableIncreaseStepTime = 90
+	stableDecreaseStepTime = 5
+	stableIncreaseStepTime = 60
 	rtt = 50
 	stableTime = 0.5
 
