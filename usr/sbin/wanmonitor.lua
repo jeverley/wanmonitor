@@ -478,7 +478,7 @@ local function calculateAssuredRate(qdisc)
 	end
 
 	updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
-	qdisc.assured = mean(qdisc.assuredSample) * qdisc.assuredProportion
+	qdisc.assured = math.max(table.unpack(qdisc.assuredSample)) * qdisc.assuredProportion
 
 	if not qdisc.stable then
 		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
