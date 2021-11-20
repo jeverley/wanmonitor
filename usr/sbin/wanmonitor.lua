@@ -365,6 +365,13 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.assured)
 		.. ";	"
+		.. string.format("%.2f", ingress.stable)
+		.. ";	"
+		.. string.format(
+			"%.2f",
+			egress.stable
+		)
+		.. ";	"
 		.. string.format(
 			"%.2f",
 			ingressDecreaseChance
@@ -495,16 +502,16 @@ local function calculateAssuredRate(qdisc)
 	updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
 	local assuredMin = math.min(table.unpack(qdisc.assuredSample))
 	local assuredMax = math.max(table.unpack(qdisc.assuredSample))
-	qdisc.assured = assuredMin * (1 - qdisc.assuredProportion) + assuredMax * qdisc.assuredProportion
 
-	if not qdisc.stable then
-		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
-	else
-		qdisc.stable = assuredMin * 0.95 * (1 - 0.25) + median(qdisc.assuredSample) * 0.25
-	end
+	qdisc.assured = assuredMin * (1 - qdisc.assuredProportion) + assuredMax * qdisc.assuredProportion
+	qdisc.stable = assuredMin * 0.99 * (1 - 0.5) + median(qdisc.assuredSample) * 0.5
 end
 
 local function calculateDecreaseChance(qdisc, compared)
+	if not qdisc.stable then
+		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
+	end
+
 	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
 		qdisc.stableComparision = nil
 		qdisc.decreaseChance = nil
@@ -517,6 +524,10 @@ local function calculateDecreaseChance(qdisc, compared)
 
 	if compared.utilisation and compared.utilisation > 1.111 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.7 / compared.utilisation
+	end
+
+	if compared.utilisation < 0.9 and qdisc.utilisation > 0.9 then
+		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 1.2
 	end
 
 	if
@@ -620,13 +631,13 @@ local function adjustSqm()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
-	calculateAssuredRate(egress)
-	calculateAssuredRate(ingress)
-
 	calculateDecreaseChance(egress, ingress)
 	calculateDecreaseChance(ingress, egress)
 	adjustDecreaseChance(egress, ingress)
 	adjustDecreaseChance(ingress, egress)
+
+	calculateAssuredRate(egress)
+	calculateAssuredRate(ingress)
 
 	calculateChange(egress)
 	calculateChange(ingress)
