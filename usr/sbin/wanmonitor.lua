@@ -454,38 +454,41 @@ local function calculateAssuredRate(qdisc)
 		qdisc.assuredSample = {}
 	end
 
+	if not qdisc.latent and qdisc.assuredSample[1] and qdisc.rate > math.max(table.unpack(qdisc.assuredSample)) then
+		qdisc.assuredSample = {}
+	end
+
 	if ping.current > ping.limit then
 		if qdisc.assuredProportion > 0.6 then
 			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
 		end
 		qdisc.latent = true
 	else
-		if qdisc.latent then
-			local assured = math.min(qdisc.bandwidth, math.max(qdisc.assured, qdisc.rate))
-			for i = #qdisc.assuredSample, 1, -1 do
-				if qdisc.assuredSample[i] > assured then
-					table.remove(qdisc.assuredSample, i)
-				end
-			end
-			table.insert(qdisc.assuredSample, assured)
-		end
 		qdisc.assuredProportion = 1
 		qdisc.latent = nil
 	end
 
-	if qdisc.assuredSample[1] and qdisc.rate > math.max(table.unpack(qdisc.assuredSample)) then
-		qdisc.assuredSample = {}
+	if qdisc.latent and qdisc.assuredSample[1] and math.max(table.unpack(qdisc.assuredSample)) > qdisc.bandwidth then
+		local assured = qdisc.bandwidth
+		for i = #qdisc.assuredSample, 1, -1 do
+			if qdisc.assuredSample[i] > assured then
+				table.remove(qdisc.assuredSample, i)
+			end
+		end
+		table.insert(qdisc.assuredSample, assured)
 	end
 
 	updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
-	qdisc.assured = math.max(table.unpack(qdisc.assuredSample)) * qdisc.assuredProportion
+	local assuredMin = math.min(table.unpack(qdisc.assuredSample))
+	local assuredMax = math.max(table.unpack(qdisc.assuredSample))
+	qdisc.assured = assuredMin * (1 - qdisc.assuredProportion) + assuredMax * qdisc.assuredProportion
 
 	if not qdisc.stable then
 		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
 	elseif not qdisc.latent then
 		qdisc.stable = qdisc.assured
 	else
-		qdisc.stable = math.min(table.unpack(qdisc.assuredSample))
+		qdisc.stable = assuredMin * 0.9
 	end
 end
 
@@ -500,7 +503,7 @@ local function calculateDecreaseChance(qdisc, compared)
 	qdisc.stableComparision = (qdisc.rate - qdisc.stable) / qdisc.stable
 	qdisc.decreaseChanceReducer = 1
 
-	if compared.utilisation and compared.utilisation > 1 then
+	if compared.utilisation and compared.utilisation > 1.111 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.7 / compared.utilisation
 	end
 
