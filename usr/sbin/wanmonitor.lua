@@ -513,7 +513,7 @@ local function calculateStableRate(qdisc)
 
 	if qdisc.rate > qdisc.stable then
 		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.rate
-	elseif ping.current < qdisc.stable then
+	elseif ping.rate < qdisc.stable then
 		qdisc.stable = stableDecreaseResistance * qdisc.stable + (1 - stableDecreaseResistance) * qdisc.rate
 	end
 end
@@ -642,6 +642,9 @@ local function adjustSqm()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
+	calculateAssuredRate(egress)
+	calculateAssuredRate(ingress)
+
 	calculateStableRate(egress)
 	calculateStableRate(ingress)
 
@@ -649,9 +652,6 @@ local function adjustSqm()
 	calculateDecreaseChance(ingress, egress)
 	adjustDecreaseChance(egress, ingress)
 	adjustDecreaseChance(ingress, egress)
-
-	calculateAssuredRate(egress)
-	calculateAssuredRate(ingress)
 
 	calculateChange(egress)
 	calculateChange(ingress)
@@ -932,7 +932,7 @@ local function initialise()
 
 	mssJitterFix = false
 	stableDecreaseStepTime = 10
-	stableIncreaseStepTime = 60
+	stableIncreaseStepTime = 90
 	rtt = 50
 	stableTime = 0.5
 
