@@ -517,6 +517,10 @@ local function calculateStableRate(qdisc)
 		return
 	end
 
+	if not qdisc.assured then
+		qdisc.assured = qdisc.rate
+	end
+
 	local observation = math.min(qdisc.rate, qdisc.assured)
 	if observation > qdisc.stable then
 		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * observation
@@ -644,11 +648,11 @@ local function adjustSqm()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
-	calculateAssuredRate(egress)
-	calculateAssuredRate(ingress)
-
 	calculateStableRate(egress)
 	calculateStableRate(ingress)
+
+	calculateAssuredRate(egress)
+	calculateAssuredRate(ingress)
 
 	calculateDecreaseChance(egress, ingress)
 	calculateDecreaseChance(ingress, egress)
@@ -933,7 +937,7 @@ local function initialise()
 	end
 
 	mssJitterFix = false
-	stableDecreaseStepTime = 5
+	stableDecreaseStepTime = 1
 	stableIncreaseStepTime = 60
 	rtt = 50
 	stableTime = 0.5
