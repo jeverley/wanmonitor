@@ -481,7 +481,6 @@ local function calculateAssuredRate(qdisc)
 		end
 		qdisc.latent = true
 	else
-		qdisc.assuredProportion = 1
 		qdisc.latent = nil
 	end
 
@@ -491,7 +490,6 @@ local function calculateAssuredRate(qdisc)
 				table.remove(qdisc.assuredSample, i)
 			end
 		end
-		qdisc.assuredProportion = 1 - interval * 0.1
 		table.insert(qdisc.assuredSample, qdisc.bandwidth)
 	end
 
@@ -542,10 +540,7 @@ local function calculateDecreaseChance(qdisc, compared)
 	end
 
 	if
-		compared.assured
-		and compared.rate < compared.stable
-		and compared.rate / compared.assured > 0.6
-		and compared.rate / compared.assured < 0.8
+		compared.rate < compared.stable * 0.7 and compared.rate > compared.stable * 0.6
 	then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.1
 	end
@@ -584,7 +579,7 @@ local function calculateDecrease(qdisc)
 	if ping.current < ping.ceiling then
 		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 2
 	else
-		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.6
+		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	end
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
 
