@@ -516,7 +516,11 @@ local function calculateStableRate(qdisc)
 	end
 
 	if qdisc.rate > qdisc.stable then
-		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.rate
+		if ping.current > ping.limit then
+			qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.rate * 0.9
+		else
+			qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * qdisc.rate
+		end
 	elseif qdisc.rate < qdisc.stable then
 		qdisc.stable = stableDecreaseResistance * qdisc.stable + (1 - stableDecreaseResistance) * qdisc.rate
 	end
@@ -545,9 +549,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 1.2
 	end
 
-	if
-		compared.rate < compared.stable * 0.7 and compared.rate > compared.stable * 0.6
-	then
+	if compared.rate < compared.stable * 0.7 and compared.rate > compared.stable * 0.6 then
 		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.1
 	end
 
