@@ -489,7 +489,7 @@ local function calculateAssuredRate(qdisc)
 	elseif not qdisc.latent then
 		qdisc.stable = qdisc.assured
 	else
-		qdisc.stable = assuredMin * (1 - 0.1) + assuredMax * 0.1
+		qdisc.stable = assuredMin * 0.95 * (1 - 0.2) + assuredMax * 0.2
 	end
 end
 
