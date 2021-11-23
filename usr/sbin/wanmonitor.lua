@@ -34,10 +34,10 @@ local logfile
 local mssJitterFix
 local reconnect
 local rtt
-local decreaseStepTime
-local decreaseResistance
-local increaseStepTime
-local increaseResistance
+local highResistance
+local highResistanceStepTime
+local lowResistance
+local lowResistanceStepTime
 local learningSeconds
 local stableTime
 local verbose
@@ -106,23 +106,6 @@ local function updateSample(sample, observation, period)
 	while #sample > period do
 		table.remove(sample, 1)
 	end
-end
-
-local function mean(sample)
-	return sum(sample) / #sample
-end
-
-local function median(sample)
-	local values = {}
-	for i = 1, #sample do
-		table.insert(values, sample[i])
-	end
-	table.sort(values)
-	local middle = #values * 0.5
-	if #values % 2 == 0 then
-		return (values[middle] + values[middle + 1]) * 0.5
-	end
-	return values[middle + 0.5]
 end
 
 local function streamingMedian(persist, observation, minimumStep)
@@ -414,7 +397,7 @@ local function getQdisc(qdisc)
 	qdisc.kind = tc[1].kind
 end
 
-local function updateQdisc(qdisc)
+local function updateQdiscBandwidth(qdisc)
 	if not qdisc.change or qdisc.change == 0 then
 		return
 	end
@@ -469,13 +452,12 @@ local function updateRateStatistics(qdisc)
 	else
 		qdisc.utilisation = 0
 	end
-end
 
-local function calculateRateBounds(qdisc)
 	if not qdisc.last then
-		qdisc.last = 1
-		qdisc.lower = 1
+		qdisc.last = qdisc.rate
+		qdisc.lower = qdisc.rate
 		qdisc.upper = qdisc.rate
+		qdisc.assured = qdisc.rate
 	end
 
 	if qdisc.rate > qdisc.last then
@@ -486,21 +468,26 @@ local function calculateRateBounds(qdisc)
 		qdisc.min = qdisc.rate
 	end
 	qdisc.last = qdisc.rate
-	
+
 	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
 
+	highResistanceStepTime = 2
+	lowResistanceStepTime = 0.01
+	highResistance = math.exp(math.log(0.5) / (highResistanceStepTime / interval))
+	lowResistance = math.exp(math.log(0.5) / (lowResistanceStepTime / interval))
+
 	if qdisc.min < qdisc.lower then
-		qdisc.lower = decreaseResistance * qdisc.lower + (1 - decreaseResistance) * qdisc.min
+		qdisc.lower = lowResistance * qdisc.lower + (1 - lowResistance) * qdisc.min
 	else
-		qdisc.lower = increaseResistance * qdisc.lower + (1 - increaseResistance) * qdisc.min
+		qdisc.lower = highResistance * qdisc.lower + (1 - highResistance) * qdisc.min
 	end
 	if qdisc.max < qdisc.upper then
-		qdisc.upper = decreaseResistance * qdisc.upper + (1 - decreaseResistance) * qdisc.max
+		qdisc.upper = highResistance * qdisc.upper + (1 - highResistance) * qdisc.max
 	else
-		qdisc.upper = increaseResistance * qdisc.upper + (1 - increaseResistance) * qdisc.max
+		qdisc.upper = lowResistance * qdisc.upper + (1 - lowResistance) * qdisc.max
 	end
 
-	local assuredProportion = 0.6
+	local assuredProportion = 0.8
 	qdisc.assured = qdisc.lower * (1 - assuredProportion) + qdisc.upper * assuredProportion
 end
 
@@ -509,6 +496,7 @@ local function calculateBaseDecreaseChance(qdisc)
 		qdisc.decreaseChance = nil
 		return
 	end
+
 	qdisc.decreaseChance = qdisc.deviance
 end
 
@@ -516,11 +504,12 @@ local function normaliseDecreaseChance(qdisc, compared)
 	if not qdisc.decreaseChance then
 		return
 	end
+
 	if not compared.decreaseChance then
 		if qdisc.decreaseChance > 1 then
 			qdisc.decreaseChance = 1
 		end
-	elseif qdisc.decreaseChance > 1 then
+	elseif qdisc.decreaseChance > compared.decreaseChance and qdisc.decreaseChance > 1 then
 		compared.decreaseChance = compared.decreaseChance / qdisc.decreaseChance
 		qdisc.decreaseChance = 1
 	end
@@ -531,9 +520,9 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
-	if qdisc.rate < qdisc.lower * 0.5 then
+	if qdisc.rate < qdisc.assured * 0.5 then
 		qdisc.decreaseChance = qdisc.decreaseChance * 0.2
-	elseif compared.rate < compared.lower * 0.5 then
+	elseif compared.rate < compared.assured * 0.5 then
 		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	end
 
@@ -554,11 +543,12 @@ local function amplifyDecreaseChanceDifference(qdisc, compared)
 	if not qdisc.decreaseChance or not compared.decreaseChance then
 		return
 	end
-	local amplify = 7
+
+	local amplify = 2
 	if qdisc.decreaseChance < compared.decreaseChance then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
 	end
-	if qdisc.decreaseChance < 0.001 then
+	if qdisc.decreaseChance < 0.01 then
 		qdisc.decreaseChance = nil
 	end
 end
@@ -579,9 +569,11 @@ end
 
 local function calculateDecrease(qdisc)
 	if ping.current < ping.ceiling then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 5
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 3
 	end
+
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
+
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
 	end
@@ -636,16 +628,13 @@ local function adjustSqm()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
-	calculateRateBounds(egress)
-	calculateRateBounds(ingress)
-
 	calculateDecreaseChances()
 
 	calculateChange(egress)
 	calculateChange(ingress)
 
-	updateQdisc(egress)
-	updateQdisc(ingress)
+	updateQdiscBandwidth(egress)
+	updateQdiscBandwidth(ingress)
 
 	mssClamp(egress)
 	mssClamp(ingress)
@@ -944,8 +933,6 @@ local function initialise()
 	mssJitterFix = false
 	rtt = 50
 	stableTime = 0.5
-	decreaseStepTime = 1
-	increaseStepTime = 0
 
 	if config.mssJitterFix then
 		config.mssJitterFix = toboolean(config.mssJitterFix)
@@ -976,9 +963,6 @@ local function initialise()
 			stableTime = config.stableTime
 		end
 	end
-
-	decreaseResistance = math.exp(math.log(0.5) / (decreaseStepTime / interval))
-	increaseResistance = math.exp(math.log(0.5) / (increaseStepTime / interval))
 end
 
 local function daemonise()
