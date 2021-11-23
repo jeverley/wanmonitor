@@ -34,10 +34,11 @@ local logfile
 local mssJitterFix
 local reconnect
 local rtt
-local stableDecreaseResistance
-local stableDecreaseStepTime
-local stableIncreaseResistance
-local stableIncreaseStepTime
+local decreaseStepTime
+local decreaseResistance
+local increaseStepTime
+local increaseResistance
+local learningSeconds
 local stableTime
 local verbose
 
@@ -56,12 +57,13 @@ if not table.unpack then
 end
 
 local function log(priority, message)
+	if console then
+		print(message)
+		return
+	end
 	syslog.openlog("wanmonitor", syslog.LOG_PID, syslog.LOG_DAEMON)
 	syslog.syslog(syslog[priority], message)
 	syslog.closelog()
-	if console then
-		print(message)
-	end
 end
 
 local function cleanup()
@@ -110,17 +112,17 @@ local function mean(sample)
 	return sum(sample) / #sample
 end
 
-local function median(values)
-	local sorted = {}
-	for i = 1, #values do
-		table.insert(sorted, values[i])
+local function median(sample)
+	local values = {}
+	for i = 1, #sample do
+		table.insert(values, sample[i])
 	end
-	table.sort(sorted)
-	local middle = #sorted * 0.5
-	if #sorted % 2 == 0 then
-		return (sorted[middle] + sorted[middle + 1]) * 0.5
+	table.sort(values)
+	local middle = #values * 0.5
+	if #values % 2 == 0 then
+		return (values[middle] + values[middle + 1]) * 0.5
 	end
-	return sorted[middle + 0.5]
+	return values[middle + 0.5]
 end
 
 local function streamingMedian(persist, observation, minimumStep)
@@ -360,17 +362,17 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", ingress.rate)
 		.. ";	"
+		.. string.format("%.2f", ingress.lower)
+		.. ";	"
+		.. string.format("%.2f", ingress.upper)
+		.. ";	"
 		.. string.format("%.2f", egress.rate)
 		.. ";	"
-		.. string.format("%.2f", ingress.assured)
-		.. ";	"
-		.. string.format("%.2f", egress.assured)
-		.. ";	"
-		.. string.format("%.2f", ingress.stable)
+		.. string.format("%.2f", egress.lower)
 		.. ";	"
 		.. string.format(
 			"%.2f",
-			egress.stable
+			egress.upper
 		)
 		.. ";	"
 		.. string.format(
@@ -469,94 +471,59 @@ local function updateRateStatistics(qdisc)
 	end
 end
 
-local function calculateAssuredRate(qdisc)
-	if not qdisc.assuredProportion then
-		qdisc.assuredProportion = 1
-		qdisc.assuredSample = {}
+local function calculateRateBounds(qdisc)
+	if not qdisc.last then
+		qdisc.last = 1
+		qdisc.lower = 1
+		qdisc.upper = qdisc.rate
 	end
 
-	if ping.current > ping.limit then
-		if not qdisc.latent and qdisc.assuredSample[1] then
-			local previousMax = math.max(table.unpack(qdisc.assuredSample))
-			qdisc.assuredSample = {}
-			qdisc.assuredSample[1] = previousMax
-		end
-		if qdisc.assuredProportion >= 0 + interval * 0.1 then
-			qdisc.assuredProportion = qdisc.assuredProportion - interval * 0.1
-		end
-		qdisc.latent = true
+	if qdisc.rate > qdisc.last then
+		qdisc.max = qdisc.rate
+		qdisc.min = qdisc.last
 	else
-		if ping.clear > stableTime and qdisc.assuredProportion < 1 then
-			qdisc.assuredProportion = qdisc.assuredProportion + interval * 0.1 * 0.5
-		end
-		qdisc.latent = nil
+		qdisc.max = qdisc.last
+		qdisc.min = qdisc.rate
+	end
+	qdisc.last = qdisc.rate
+	
+	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
+
+	if qdisc.min < qdisc.lower then
+		qdisc.lower = decreaseResistance * qdisc.lower + (1 - decreaseResistance) * qdisc.min
+	else
+		qdisc.lower = increaseResistance * qdisc.lower + (1 - increaseResistance) * qdisc.min
+	end
+	if qdisc.max < qdisc.upper then
+		qdisc.upper = decreaseResistance * qdisc.upper + (1 - decreaseResistance) * qdisc.max
+	else
+		qdisc.upper = increaseResistance * qdisc.upper + (1 - increaseResistance) * qdisc.max
 	end
 
-	if qdisc.latent and qdisc.assuredSample[1] and math.max(table.unpack(qdisc.assuredSample)) > qdisc.bandwidth then
-		for i = #qdisc.assuredSample, 1, -1 do
-			if qdisc.assuredSample[i] > qdisc.bandwidth then
-				table.remove(qdisc.assuredSample, i)
-			end
-		end
-		table.insert(qdisc.assuredSample, qdisc.bandwidth)
-	end
-
-	updateSample(qdisc.assuredSample, qdisc.rate, 5 / interval)
-	local assuredMin = math.min(table.unpack(qdisc.assuredSample))
-	local assuredMax = math.max(table.unpack(qdisc.assuredSample))
-	qdisc.assured = assuredMin * (1 - qdisc.assuredProportion) + assuredMax * qdisc.assuredProportion
+	local assuredProportion = 0.6
+	qdisc.assured = qdisc.lower * (1 - assuredProportion) + qdisc.upper * assuredProportion
 end
 
-local function calculateStableRate(qdisc)
-	if not qdisc.stable then
-		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
-	end
-
-	if ping.current < ping.baseline and qdisc.rate > qdisc.stable then
-		qdisc.stable = qdisc.rate
-		return
-	end
-
-	if not qdisc.assured then
-		qdisc.assured = qdisc.rate
-	end
-
-	local observation = math.min(qdisc.rate, qdisc.assured)
-	if observation > qdisc.stable then
-		qdisc.stable = stableIncreaseResistance * qdisc.stable + (1 - stableIncreaseResistance) * observation
-	elseif observation < qdisc.stable then
-		qdisc.stable = stableDecreaseResistance * qdisc.stable + (1 - stableDecreaseResistance) * observation
-	end
-end
-
-local function calculateDecreaseChance(qdisc, compared)
-	if not qdisc.stable then
-		qdisc.stable = math.max(qdisc.rate * 0.8, qdisc.bandwidth * 0.01)
-	end
-
-	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.rate <= qdisc.stable then
-		qdisc.stableComparision = nil
+local function calculateBaseDecreaseChance(qdisc)
+	if not qdisc.bandwidth or ping.current < ping.limit or learningSeconds > 0 then
 		qdisc.decreaseChance = nil
-		qdisc.decreaseChanceReducer = nil
 		return
 	end
+	qdisc.decreaseChance = qdisc.deviance
+end
 
-	qdisc.stableComparision = (qdisc.rate - qdisc.stable) / qdisc.stable
-	qdisc.decreaseChanceReducer = 1
-
-	if compared.utilisation and compared.utilisation > 1 and qdisc.utilisation < 1 then
-		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * qdisc.utilisation / compared.utilisation
+local function normaliseDecreaseChance(qdisc, compared)
+	if not qdisc.decreaseChance then
+		return
 	end
-
-	if qdisc.utilisation > 1.111 then
-		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * qdisc.utilisation
+	if not compared.decreaseChance then
+		if qdisc.decreaseChance > 1 then
+			qdisc.decreaseChance = 1
+		end
+	elseif qdisc.decreaseChance > 1 then
+		compared.decreaseChance = compared.decreaseChance / qdisc.decreaseChance
+		qdisc.decreaseChance = 1
 	end
-
-	if compared.rate < compared.stable * 0.7 and compared.rate > compared.stable * 0.6 then
-		qdisc.decreaseChanceReducer = qdisc.decreaseChanceReducer * 0.1
-	end
-
-	qdisc.decreaseChance = qdisc.stableComparision * qdisc.decreaseChanceReducer
 end
 
 local function adjustDecreaseChance(qdisc, compared)
@@ -564,36 +531,57 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
+	if qdisc.rate < qdisc.lower * 0.5 then
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.2
+	elseif compared.rate < compared.lower * 0.5 then
+		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
+	end
+
+	if qdisc.assured / qdisc.bandwidth > 1.111111 then
+		qdisc.decreaseChance = 0
+	end
+
+	if compared.utilisation > 1 then
+		if qdisc.deviance < 0.1 then
+			qdisc.decreaseChance = 0
+		elseif qdisc.utilisation < 1 then
+			qdisc.decreaseChance = qdisc.decreaseChance * 0.5
+		end
+	end
+end
+
+local function amplifyDecreaseChanceDifference(qdisc, compared)
+	if not qdisc.decreaseChance or not compared.decreaseChance then
+		return
+	end
 	local amplify = 7
-	if not compared.decreaseChance then
-		if qdisc.decreaseChance > 1 then
-			qdisc.decreaseChance = 1
-		end
-	elseif qdisc.decreaseChance < compared.decreaseChance then
-		if compared.decreaseChance > 1 then
-			qdisc.decreaseChance = qdisc.decreaseChance / compared.decreaseChance
-			qdisc.decreaseChance = qdisc.decreaseChance * qdisc.decreaseChance ^ amplify
-			compared.decreaseChance = 1
-		else
-			qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
-		end
-	elseif qdisc.decreaseChance > 1 then
-		compared.decreaseChance = compared.decreaseChance / qdisc.decreaseChance
-		qdisc.decreaseChance = 1
+	if qdisc.decreaseChance < compared.decreaseChance then
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
 	end
 	if qdisc.decreaseChance < 0.001 then
 		qdisc.decreaseChance = nil
 	end
 end
 
+local function calculateDecreaseChances()
+	calculateBaseDecreaseChance(egress)
+	calculateBaseDecreaseChance(ingress)
+
+	normaliseDecreaseChance(egress, ingress)
+	normaliseDecreaseChance(ingress, egress)
+
+	adjustDecreaseChance(egress, ingress)
+	adjustDecreaseChance(ingress, egress)
+
+	amplifyDecreaseChanceDifference(egress, ingress)
+	amplifyDecreaseChanceDifference(ingress, egress)
+end
+
 local function calculateDecrease(qdisc)
 	if ping.current < ping.ceiling then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 2
-	else
-		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 5
 	end
 	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
-
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
 	end
@@ -648,16 +636,10 @@ local function adjustSqm()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
-	calculateStableRate(egress)
-	calculateStableRate(ingress)
+	calculateRateBounds(egress)
+	calculateRateBounds(ingress)
 
-	calculateAssuredRate(egress)
-	calculateAssuredRate(ingress)
-
-	calculateDecreaseChance(egress, ingress)
-	calculateDecreaseChance(ingress, egress)
-	adjustDecreaseChance(egress, ingress)
-	adjustDecreaseChance(ingress, egress)
+	calculateDecreaseChances()
 
 	calculateChange(egress)
 	calculateChange(ingress)
@@ -690,6 +672,10 @@ local function statisticsInterval()
 	previousTxBytes = txBytes
 	previousRxBytes = rxBytes
 	previousEpoch = intervalEpoch
+
+	if learningSeconds > 0 then
+		learningSeconds = learningSeconds - interval
+	end
 
 	if #ping.times > 0 then
 		ping.current = math.min(table.unpack(ping.times))
@@ -805,14 +791,26 @@ local function initialise()
 	pidFile = "/var/run/wanmonitor." .. interface .. ".pid"
 
 	local config = uciGet("wanmonitor", interface)
-	if not config or not toboolean(config.enabled) then
+	if not config then
+		if console then
+			log("LOG_ERR", "Configuration is missing for interface " .. interface)
+		end
+		os.exit()
+	end
+
+	if not toboolean(config.enabled) then
+		if console then
+			log("LOG_ERR", "Monitoring is not enabled for interface " .. interface)
+		end
 		os.exit()
 	end
 
 	local status = interfaceStatus(interface)
 	if not status.up then
+		log("LOG_ERR", "Interface " .. interface .. " is not up")
 		os.exit()
 	end
+
 	device = status.l3_device
 	if not device then
 		log("LOG_ERR", "The device for interface " .. interface .. " is unavailable")
@@ -917,7 +915,7 @@ local function initialise()
 		if type(logfileArg) == "string" and string.find(logfileArg, "^/[^%$]*$") then
 			logfile = logfileArg
 		else
-			log("LOG_ERR", "Invalid log arguement path")
+			log("LOG_ERR", "Invalid log argument path")
 			os.exit()
 		end
 	elseif config.logfile then
@@ -936,18 +934,18 @@ local function initialise()
 		return
 	end
 
-	mssJitterFix = false
-	stableDecreaseStepTime = 1
-	stableIncreaseStepTime = 60
-	rtt = 50
-	stableTime = 0.5
-
 	egress.device = device
 	if not config.ingressDevice or device == config.ingressDevice then
 		ingress.device = "ifb4" .. string.sub(device, 1, 11)
 	else
 		ingress.device = config.ingressDevice
 	end
+
+	mssJitterFix = false
+	rtt = 50
+	stableTime = 0.5
+	decreaseStepTime = 1
+	increaseStepTime = 0
 
 	if config.mssJitterFix then
 		config.mssJitterFix = toboolean(config.mssJitterFix)
@@ -956,26 +954,6 @@ local function initialise()
 			os.exit()
 		else
 			mssJitterFix = config.mssJitterFix
-		end
-	end
-
-	if config.assuredDecreaseStepTime then
-		config.assuredDecreaseStepTime = tonumber(config.assuredDecreaseStepTime)
-		if not config.assuredDecreaseStepTime or config.assuredDecreaseStepTime <= 0 then
-			log("LOG_ERR", "Invalid assuredDecreaseStepTime config value specified for " .. interface)
-			os.exit()
-		else
-			assuredDecreaseStepTime = config.assuredDecreaseStepTime
-		end
-	end
-
-	if config.stableIncreaseStepTime then
-		config.stableIncreaseStepTime = tonumber(config.stableIncreaseStepTime)
-		if not config.stableIncreaseStepTime or config.stableIncreaseStepTime <= 0 then
-			log("LOG_ERR", "Invalid stableIncreaseStepTime config value specified for " .. interface)
-			os.exit()
-		else
-			stableIncreaseStepTime = config.stableIncreaseStepTime
 		end
 	end
 
@@ -999,8 +977,8 @@ local function initialise()
 		end
 	end
 
-	stableDecreaseResistance = math.exp(math.log(0.5) / (stableDecreaseStepTime / interval))
-	stableIncreaseResistance = math.exp(math.log(0.5) / (stableIncreaseStepTime / interval))
+	decreaseResistance = math.exp(math.log(0.5) / (decreaseStepTime / interval))
+	increaseResistance = math.exp(math.log(0.5) / (increaseStepTime / interval))
 end
 
 local function daemonise()
@@ -1027,6 +1005,7 @@ local function main()
 
 	log("LOG_NOTICE", "Started for " .. interface .. " (" .. device .. ")")
 
+	learningSeconds = 5
 	retriesRemaining = retries
 	while retriesRemaining > 0 do
 		pingLoop()
