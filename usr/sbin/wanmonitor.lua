@@ -805,12 +805,19 @@ local function initialise()
 	pidFile = "/var/run/wanmonitor." .. interface .. ".pid"
 
 	local config = uciGet("wanmonitor", interface)
-	if not config or not toboolean(config.enabled) then
+	if not config then
+		log("LOG_ERR", "No config found for interface " .. interface)
+		os.exit()
+	end
+
+	if not toboolean(config.enabled) then
+		log("LOG_ERR", "The config for " .. interface .. " is not enabled")
 		os.exit()
 	end
 
 	local status = interfaceStatus(interface)
 	if not status.up then
+		log("LOG_ERR", "The interface " .. interface .." is not up")
 		os.exit()
 	end
 	device = status.l3_device
@@ -917,7 +924,7 @@ local function initialise()
 		if type(logfileArg) == "string" and string.find(logfileArg, "^/[^%$]*$") then
 			logfile = logfileArg
 		else
-			log("LOG_ERR", "Invalid log arguement path")
+			log("LOG_ERR", "Invalid log argument path")
 			os.exit()
 		end
 	elseif config.logfile then
