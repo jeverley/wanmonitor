@@ -465,19 +465,30 @@ local function updateRateStatistics(qdisc)
 
 	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
 
+	lowerDecreaseStepTime = 2
+	lowerIncreaseStepTime = 5
+	upperDecreaseStepTime = 2
+	upperIncreaseStepTime = 0.01
+	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
+	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
+	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
+	upperIncreaseResistance = math.exp(math.log(0.5) / (upperIncreaseStepTime / interval))
+
 	if qdisc.min < qdisc.lower then
-		qdisc.lower = lowResistance * qdisc.lower + (1 - lowResistance) * qdisc.min
+		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * qdisc.min
+	elseif ping.current < ping.baseline then
+		qdisc.lower = qdisc.rate
 	else
-		qdisc.lower = highResistance * qdisc.lower + (1 - highResistance) * qdisc.min
+		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * qdisc.min
 	end
 	if qdisc.max < qdisc.upper then
-		qdisc.upper = highResistance * qdisc.upper + (1 - highResistance) * qdisc.max
+		qdisc.upper = upperDecreaseResistance * qdisc.upper + (1 - upperDecreaseResistance) * qdisc.max
 	else
-		qdisc.upper = lowResistance * qdisc.upper + (1 - lowResistance) * qdisc.max
+		qdisc.upper = upperIncreaseResistance * qdisc.upper + (1 - upperIncreaseResistance) * qdisc.max
 	end
 
-	local assuredProportion = 0.8
-	qdisc.assured = qdisc.lower * (1 - assuredProportion) + qdisc.upper * assuredProportion
+	local assuredProportion = 0.6
+	qdisc.assured = math.min(qdisc.min, qdisc.lower) * (1 - assuredProportion) + qdisc.upper * assuredProportion
 end
 
 local function calculateBaseDecreaseChance(qdisc)
@@ -519,27 +530,30 @@ local function adjustDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = 0
 	end
 
+	if ping.latent == interval then
+		if qdisc.rate < qdisc.assured then
+			qdisc.decreaseChance = 0
+		else
+			qdisc.decreaseChance = qdisc.decreaseChance * 0.2
+		end
+	end
+
 	if compared.utilisation > 1 then
 		if qdisc.deviance < 0.1 then
 			qdisc.decreaseChance = 0
 		elseif qdisc.utilisation < 1 then
-			qdisc.decreaseChance = qdisc.decreaseChance * 0.5
+			qdisc.decreaseChance = qdisc.decreaseChance * 0.5 / compared.utilisation
 		end
 	end
 end
 
 local function amplifyDecreaseChanceDifference(qdisc, compared)
-	if not qdisc.decreaseChance or not compared.decreaseChance then
+	if not qdisc.decreaseChance or not compared.decreaseChance or qdisc.decreaseChance >= compared.decreaseChance then
 		return
 	end
 
 	local amplify = 2
-	if qdisc.decreaseChance < compared.decreaseChance then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
-	end
-	if qdisc.decreaseChance < 0.01 then
-		qdisc.decreaseChance = nil
-	end
+	qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
 end
 
 local function calculateDecreaseChances()
@@ -569,13 +583,13 @@ local function calculateDecrease(qdisc)
 end
 
 local function calculateIncrease(qdisc)
-	local targetMultiplier = math.max(qdisc.bandwidth * 0.9, qdisc.maximum) / qdisc.bandwidth
-	if targetMultiplier < 1 then
-		targetMultiplier = targetMultiplier ^ 15
+	local attainedMultiplier = math.max(qdisc.bandwidth * 0.9, qdisc.maximum) / qdisc.bandwidth
+	if attainedMultiplier < 1 then
+		attainedMultiplier = attainedMultiplier ^ 15
 	end
 	local idleMultiplier = 1 - qdisc.utilisation * 0.7
 
-	qdisc.change = qdisc.bandwidth * 0.05 * targetMultiplier * idleMultiplier
+	qdisc.change = qdisc.bandwidth * 0.05 * attainedMultiplier * idleMultiplier
 
 	if qdisc.change < 0.008 then
 		qdisc.change = 0
@@ -588,7 +602,7 @@ local function calculateChange(qdisc)
 		return
 	end
 
-	if qdisc.decreaseChance then
+	if qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
 		calculateDecrease(qdisc)
 		return
 	end
@@ -922,10 +936,6 @@ local function initialise()
 	mssJitterClamp = false
 	rtt = 50
 	stableTime = 0.5
-	highResistanceStepTime = 2
-	lowResistanceStepTime = 0.01
-	highResistance = math.exp(math.log(0.5) / (highResistanceStepTime / interval))
-	lowResistance = math.exp(math.log(0.5) / (lowResistanceStepTime / interval))
 
 	if config.mssJitterClamp then
 		config.mssJitterClamp = toboolean(config.mssJitterClamp)
