@@ -31,7 +31,7 @@ local hosts
 local interval
 local iptype
 local logfile
-local mssJitterFix
+local mssJitterClamp
 local reconnect
 local rtt
 local highResistance
@@ -79,9 +79,9 @@ local function exit()
 	os.exit()
 end
 
-local function resetMssJitterFix()
-	egress.mssJitterFix = nil
-	ingress.mssJitterFix = nil
+local function resetMssJitterClamp()
+	egress.mssJitterClamp = nil
+	ingress.mssJitterClamp = nil
 	if pidChild then
 		signal.kill(pidChild, signal.SIGKILL)
 		pingStatus = 3
@@ -244,17 +244,14 @@ local function iptablesRuleCleanup(table, chain, rule)
 end
 
 local function mssClamp(qdisc)
-	if not mssJitterFix or not qdisc.bandwidth then
+	if not mssJitterClamp or not qdisc.bandwidth then
 		return
 	end
 
-	local direction
 	local directionArg
 	if qdisc.device == device then
-		direction = "egress"
 		directionArg = "-i"
 	else
-		direction = "ingress"
 		directionArg = "-o"
 	end
 	local pmtuClampArgs =
@@ -262,13 +259,13 @@ local function mssClamp(qdisc)
 	local jitterClampArgs =
 		'-p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "Clamp MSS to reduce jitter" -j TCPMSS --set-mss 540'
 
-	if qdisc.bandwidth < 3000 and qdisc.mssJitterFix ~= true then
+	if qdisc.bandwidth < 3000 and qdisc.mssJitterClamp ~= true then
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
 		os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
 		os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. jitterClampArgs)
-		qdisc.mssJitterFix = true
-	elseif qdisc.bandwidth >= 3000 and qdisc.mssJitterFix ~= false then
+		qdisc.mssJitterClamp = true
+	elseif qdisc.bandwidth >= 3000 and qdisc.mssJitterClamp ~= false then
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. pmtuClampArgs)
 		iptablesRuleCleanup("mangle", "FORWARD", directionArg .. " " .. device .. " " .. jitterClampArgs)
 		local wan = firewallZoneConfig("wan")
@@ -276,7 +273,7 @@ local function mssClamp(qdisc)
 			os.execute("iptables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
 			os.execute("ip6tables -t mangle -A FORWARD " .. directionArg .. " " .. device .. " " .. pmtuClampArgs)
 		end
-		qdisc.mssJitterFix = false
+		qdisc.mssJitterClamp = false
 	end
 end
 
@@ -307,7 +304,6 @@ local function adjustmentLog()
 		return
 	end
 
-	local ingressUtilisation = ingress.utilisation
 	local ingressBandwidth = 0
 	local ingressDecreaseChance = 0
 	if ingress.bandwidth then
@@ -317,7 +313,6 @@ local function adjustmentLog()
 		ingressDecreaseChance = ingress.decreaseChance
 	end
 
-	local egressUtilisation = egress.utilisation
 	local egressBandwidth = 0
 	local egressDecreaseChance = 0
 	if egress.bandwidth then
@@ -329,9 +324,9 @@ local function adjustmentLog()
 
 	local logLine = string.format("%.4f", intervalEpoch)
 		.. ";	"
-		.. string.format("%.3f", ingressUtilisation)
+		.. string.format("%.3f", ingress.utilisation)
 		.. ";	"
-		.. string.format("%.3f", egressUtilisation)
+		.. string.format("%.3f", egress.utilisation)
 		.. ";	"
 		.. string.format("%.2f", ping.baseline)
 		.. ";	"
@@ -457,7 +452,6 @@ local function updateRateStatistics(qdisc)
 		qdisc.last = qdisc.rate
 		qdisc.lower = qdisc.rate
 		qdisc.upper = qdisc.rate
-		qdisc.assured = qdisc.rate
 	end
 
 	if qdisc.rate > qdisc.last then
@@ -470,11 +464,6 @@ local function updateRateStatistics(qdisc)
 	qdisc.last = qdisc.rate
 
 	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
-
-	highResistanceStepTime = 2
-	lowResistanceStepTime = 0.01
-	highResistance = math.exp(math.log(0.5) / (highResistanceStepTime / interval))
-	lowResistance = math.exp(math.log(0.5) / (lowResistanceStepTime / interval))
 
 	if qdisc.min < qdisc.lower then
 		qdisc.lower = lowResistance * qdisc.lower + (1 - lowResistance) * qdisc.min
@@ -930,17 +919,21 @@ local function initialise()
 		ingress.device = config.ingressDevice
 	end
 
-	mssJitterFix = false
+	mssJitterClamp = false
 	rtt = 50
 	stableTime = 0.5
+	highResistanceStepTime = 2
+	lowResistanceStepTime = 0.01
+	highResistance = math.exp(math.log(0.5) / (highResistanceStepTime / interval))
+	lowResistance = math.exp(math.log(0.5) / (lowResistanceStepTime / interval))
 
-	if config.mssJitterFix then
-		config.mssJitterFix = toboolean(config.mssJitterFix)
-		if config.mssJitterFix == nil then
-			log("LOG_ERR", "Invalid mssJitterFix config value specified for " .. interface)
+	if config.mssJitterClamp then
+		config.mssJitterClamp = toboolean(config.mssJitterClamp)
+		if config.mssJitterClamp == nil then
+			log("LOG_ERR", "Invalid mssJitterClamp config value specified for " .. interface)
 			os.exit()
 		else
-			mssJitterFix = config.mssJitterFix
+			mssJitterClamp = config.mssJitterClamp
 		end
 	end
 
@@ -979,7 +972,7 @@ local function main()
 	signal.signal(signal.SIGHUP, exit)
 	signal.signal(signal.SIGINT, exit)
 	signal.signal(signal.SIGTERM, exit)
-	signal.signal(signal.SIGUSR1, resetMssJitterFix)
+	signal.signal(signal.SIGUSR1, resetMssJitterClamp)
 
 	if not console then
 		daemonise()
