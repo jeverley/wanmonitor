@@ -420,6 +420,7 @@ local function updatePingStatistics()
 	if not ping.baseline then
 		ping.baseline = 50
 		ping.clear = 0
+		ping.latent = 0
 		ping.median = rtt
 		ping.step = 0.5
 	end
@@ -431,10 +432,12 @@ local function updatePingStatistics()
 
 	if ping.current > ping.limit then
 		ping.clear = 0
+		ping.latent = ping.latent + interval
 		return
 	end
 
 	ping.clear = ping.clear + interval
+	ping.latent = 0
 end
 
 local function updateRateStatistics(qdisc)
