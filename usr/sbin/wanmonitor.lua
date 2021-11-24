@@ -529,10 +529,6 @@ local function adjustDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	end
 
-	if qdisc.assured / qdisc.bandwidth > 1.111111 then
-		qdisc.decreaseChance = 0
-	end
-
 	if ping.latent == interval then
 		if qdisc.rate < qdisc.assured then
 			qdisc.decreaseChance = 0
