@@ -469,7 +469,7 @@ local function updateRateStatistics(qdisc)
 	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
 
 	lowerDecreaseStepTime = 2
-	lowerIncreaseStepTime = 5
+	lowerIncreaseStepTime = 10
 	upperDecreaseStepTime = 2
 	upperIncreaseStepTime = 0.01
 	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
@@ -535,6 +535,11 @@ local function adjustDecreaseChance(qdisc, compared)
 		else
 			qdisc.decreaseChance = qdisc.decreaseChance * 0.2
 		end
+	end
+
+	if qdisc.rate < math.min(qdisc.maximum, qdisc.bandwidth) * 0.2 then
+		qdisc.decreaseChance = qdisc.decreaseChance
+			* (qdisc.rate / (math.min(qdisc.maximum, qdisc.bandwidth) * 0.2)) ^ 0.5
 	end
 
 	if compared.utilisation > 1 then
