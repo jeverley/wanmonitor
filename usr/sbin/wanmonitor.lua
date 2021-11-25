@@ -941,7 +941,7 @@ local function initialise()
 
 	mssJitterClamp = false
 	rtt = 50
-	stableTime = 0.5
+	stableTime = interval
 
 	if config.mssJitterClamp then
 		config.mssJitterClamp = toboolean(config.mssJitterClamp)
