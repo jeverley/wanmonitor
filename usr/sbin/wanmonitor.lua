@@ -471,11 +471,9 @@ local function updateRateStatistics(qdisc)
 	lowerDecreaseStepTime = 2
 	lowerIncreaseStepTime = 10
 	upperDecreaseStepTime = 2
-	upperIncreaseStepTime = 0.01
 	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
 	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
 	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
-	upperIncreaseResistance = math.exp(math.log(0.5) / (upperIncreaseStepTime / interval))
 
 	if qdisc.min < qdisc.lower then
 		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * qdisc.min
@@ -487,7 +485,7 @@ local function updateRateStatistics(qdisc)
 	if qdisc.max < qdisc.upper then
 		qdisc.upper = upperDecreaseResistance * qdisc.upper + (1 - upperDecreaseResistance) * qdisc.max
 	else
-		qdisc.upper = upperIncreaseResistance * qdisc.upper + (1 - upperIncreaseResistance) * qdisc.max
+		qdisc.upper = qdisc.max
 	end
 
 	local assuredProportion = 0.55
