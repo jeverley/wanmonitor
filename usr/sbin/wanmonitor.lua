@@ -616,7 +616,7 @@ local function calculateChange(qdisc)
 	if
 		ping.clear > stableTime
 		and math.random(1, 100) <= 75 * interval
-		and (qdisc.assured > qdisc.bandwidth * 0.999 or qdisc.utilisation < 0.6)
+		and (qdisc.assured > qdisc.bandwidth * 0.98 or qdisc.utilisation < 0.7)
 	then
 		calculateIncrease(qdisc)
 		return
