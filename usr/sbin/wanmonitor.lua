@@ -441,8 +441,8 @@ local function updatePingStatistics()
 end
 
 local function updateRateStatistics(qdisc)
-	if not qdisc.maximum or qdisc.rate > qdisc.maximum then
-		qdisc.maximum = qdisc.rate
+	if not qdisc.peak or qdisc.rate > qdisc.peak then
+		qdisc.peak = qdisc.rate
 	end
 
 	if qdisc.bandwidth then
@@ -457,32 +457,34 @@ local function updateRateStatistics(qdisc)
 		qdisc.upper = qdisc.rate
 	end
 
+	local maximum
+	local minimum
 	if qdisc.rate > qdisc.last then
-		qdisc.max = qdisc.rate
-		qdisc.min = qdisc.last
+		maximum = qdisc.rate
+		minimum = qdisc.last
 	else
-		qdisc.max = qdisc.last
-		qdisc.min = qdisc.rate
+		maximum = qdisc.last
+		minimum = qdisc.rate
 	end
 	qdisc.last = qdisc.rate
 
 	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
 
-	if qdisc.min < qdisc.lower then
-		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * qdisc.min
+	if minimum < qdisc.lower then
+		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * minimum
 	elseif ping.current < ping.baseline then
 		qdisc.lower = qdisc.rate
 	else
-		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * qdisc.min
+		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * minimum
 	end
-	if qdisc.max < qdisc.upper then
-		qdisc.upper = upperDecreaseResistance * qdisc.upper + (1 - upperDecreaseResistance) * qdisc.max
+	if maximum < qdisc.upper then
+		qdisc.upper = upperDecreaseResistance * qdisc.upper + (1 - upperDecreaseResistance) * maximum
 	else
-		qdisc.upper = qdisc.max
+		qdisc.upper = maximum
 	end
 
 	local assuredProportion = 0.55
-	qdisc.assured = math.min(qdisc.min, qdisc.lower) * (1 - assuredProportion) + qdisc.upper * assuredProportion
+	qdisc.assured = math.min(minimum, qdisc.lower) * (1 - assuredProportion) + qdisc.upper * assuredProportion
 end
 
 local function calculateBaseDecreaseChance(qdisc)
@@ -528,9 +530,9 @@ local function adjustDecreaseChance(qdisc, compared)
 		end
 	end
 
-	if qdisc.rate < math.min(qdisc.maximum, qdisc.bandwidth) * 0.2 then
+	if qdisc.rate < math.min(qdisc.peak, qdisc.bandwidth) * 0.2 then
 		qdisc.decreaseChance = qdisc.decreaseChance
-			* (qdisc.rate / (math.min(qdisc.maximum, qdisc.bandwidth) * 0.2)) ^ 0.5
+			* (qdisc.rate / (math.min(qdisc.peak, qdisc.bandwidth) * 0.2)) ^ 0.5
 	end
 
 	if compared.utilisation > 1 then
@@ -570,7 +572,7 @@ local function calculateDecrease(qdisc)
 		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 3
 	end
 
-	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
+	qdisc.change = (qdisc.bandwidth - math.max(qdisc.peak * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
 
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
@@ -578,7 +580,7 @@ local function calculateDecrease(qdisc)
 end
 
 local function calculateIncrease(qdisc)
-	local attainedMultiplier = math.max(qdisc.bandwidth * 0.8, qdisc.maximum) / qdisc.bandwidth
+	local attainedMultiplier = math.max(qdisc.bandwidth * 0.9, qdisc.peak) / qdisc.bandwidth
 	if attainedMultiplier < 1 then
 		attainedMultiplier = attainedMultiplier ^ 15
 	end
@@ -938,9 +940,6 @@ local function initialise()
 	lowerDecreaseStepTime = 2
 	lowerIncreaseStepTime = 10
 	upperDecreaseStepTime = 2
-	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
-	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
-	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
 
 	if config.mssJitterClamp then
 		config.mssJitterClamp = toboolean(config.mssJitterClamp)
@@ -971,6 +970,10 @@ local function initialise()
 			stableTime = config.stableTime
 		end
 	end
+
+	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
+	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
+	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
 end
 
 local function daemonise()
