@@ -490,7 +490,7 @@ local function updateRateStatistics(qdisc)
 		qdisc.upper = upperIncreaseResistance * qdisc.upper + (1 - upperIncreaseResistance) * qdisc.max
 	end
 
-	local assuredProportion = 0.6
+	local assuredProportion = 0.55
 	qdisc.assured = math.min(qdisc.min, qdisc.lower) * (1 - assuredProportion) + qdisc.upper * assuredProportion
 end
 
