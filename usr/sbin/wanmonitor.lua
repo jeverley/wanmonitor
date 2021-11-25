@@ -468,13 +468,6 @@ local function updateRateStatistics(qdisc)
 
 	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
 
-	lowerDecreaseStepTime = 2
-	lowerIncreaseStepTime = 10
-	upperDecreaseStepTime = 2
-	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
-	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
-	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
-
 	if qdisc.min < qdisc.lower then
 		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * qdisc.min
 	elseif ping.current < ping.baseline then
@@ -941,7 +934,13 @@ local function initialise()
 
 	mssJitterClamp = false
 	rtt = 50
-	stableTime = interval
+	stableTime = 0.5
+	lowerDecreaseStepTime = 2
+	lowerIncreaseStepTime = 10
+	upperDecreaseStepTime = 2
+	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
+	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
+	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
 
 	if config.mssJitterClamp then
 		config.mssJitterClamp = toboolean(config.mssJitterClamp)
