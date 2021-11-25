@@ -452,8 +452,8 @@ local function updateRateStatistics(qdisc)
 	end
 
 	if not qdisc.last then
-		qdisc.last = qdisc.rate
-		qdisc.lower = qdisc.rate
+		qdisc.last = qdisc.rate * 0.5
+		qdisc.lower = qdisc.rate * 0.5
 		qdisc.upper = qdisc.rate
 	end
 
@@ -585,11 +585,15 @@ local function calculateDecrease(qdisc)
 end
 
 local function calculateIncrease(qdisc)
-	local attainedMultiplier = math.max(qdisc.bandwidth * 0.9, qdisc.maximum) / qdisc.bandwidth
+	local attainedMultiplier = math.max(qdisc.bandwidth * 0.8, qdisc.maximum) / qdisc.bandwidth
 	if attainedMultiplier < 1 then
 		attainedMultiplier = attainedMultiplier ^ 15
 	end
-	local idleMultiplier = 1 - qdisc.utilisation * 0.7
+
+	local idleMultiplier = 0.3
+	if qdisc.utilisation < 1 then
+		idleMultiplier = 1 - qdisc.utilisation * 0.7
+	end
 
 	qdisc.change = qdisc.bandwidth * 0.05 * attainedMultiplier * idleMultiplier
 
