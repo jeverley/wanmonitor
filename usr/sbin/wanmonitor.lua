@@ -386,7 +386,7 @@ end
 
 local function updatePingStatistics()
 	if not ping.baseline then
-		ping.baseline = 50
+		ping.baseline = rtt
 		ping.clear = 0
 		ping.latent = 0
 		ping.median = rtt
