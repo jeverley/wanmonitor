@@ -390,11 +390,14 @@ local function updatePingStatistics()
 		ping.clear = 0
 		ping.latent = 0
 		ping.median = rtt
-		ping.step = 0.5
+		ping.step = interval
 	end
 
 	ping.delta = ping.current - ping.baseline
-	ping.baseline = streamingMedian(ping, ping.current, 0.1)
+
+	if #ping.times > 0 then
+		ping.baseline = streamingMedian(ping, ping.current, 0.1)
+	end
 	ping.limit = ping.baseline + 5
 	ping.ceiling = ping.baseline + 70
 
@@ -451,8 +454,8 @@ local function updateRateStatistics(qdisc)
 		qdisc.upper = peak
 	end
 
-	local assuredProportion = 0.55
-	qdisc.assured = math.min(trough, qdisc.lower) * (1 - assuredProportion) + qdisc.upper * assuredProportion
+	local assuredProportion = 0.5
+	qdisc.assured = (1 - assuredProportion) * math.min(trough, qdisc.lower) + assuredProportion * qdisc.upper
 end
 
 local function calculateBaseDecreaseChance(qdisc)
@@ -906,7 +909,7 @@ local function initialise()
 	stableTime = 0.5
 	lowerDecreaseStepTime = 2
 	lowerIncreaseStepTime = 10
-	upperDecreaseStepTime = 2
+	upperDecreaseStepTime = 1
 
 	if config.mssJitterClamp then
 		config.mssJitterClamp = toboolean(config.mssJitterClamp)
