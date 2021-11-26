@@ -454,7 +454,7 @@ local function updateRateStatistics(qdisc)
 		qdisc.upper = peak
 	end
 
-	local assuredProportion = 0.5
+	local assuredProportion = 0.55
 	qdisc.assured = (1 - assuredProportion) * math.min(trough, qdisc.lower) + assuredProportion * qdisc.upper
 end
 
