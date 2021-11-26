@@ -19,7 +19,7 @@ local device
 local ingress
 local interface
 local pid
-local pidChild
+local childPid
 local pidFile
 local ping
 local statusFile
@@ -67,8 +67,8 @@ local function log(priority, message)
 end
 
 local function cleanup()
-	if pidChild then
-		signal.kill(pidChild, signal.SIGKILL)
+	if childPid then
+		signal.kill(childPid, signal.SIGKILL)
 	end
 	os.remove(pidFile)
 	os.remove(statusFile)
@@ -82,8 +82,8 @@ end
 local function resetMssJitterClamp()
 	egress.mssJitterClamp = nil
 	ingress.mssJitterClamp = nil
-	if pidChild then
-		signal.kill(pidChild, signal.SIGKILL)
+	if childPid then
+		signal.kill(childPid, signal.SIGKILL)
 		pingStatus = 3
 	end
 end
@@ -91,21 +91,6 @@ end
 local function epoch()
 	local now = systime.gettimeofday()
 	return now.tv_sec + now.tv_usec * 0.000001
-end
-
-local function sum(values)
-	local total = 0
-	for i = 1, #values do
-		total = total + values[i]
-	end
-	return total
-end
-
-local function updateSample(sample, observation, period)
-	table.insert(sample, observation)
-	while #sample > period do
-		table.remove(sample, 1)
-	end
 end
 
 local function streamingMedian(persist, observation, minimumStep)
@@ -143,7 +128,7 @@ local function writeFile(file, content, mode)
 	fd:close()
 end
 
-local function execute(command)
+local function shell(command)
 	local fd = io.popen(command)
 	local stdout = fd:read("*all")
 	fd:close()
@@ -186,7 +171,7 @@ local function readArg(short, long)
 end
 
 local function uciGet(config, section, option, sectionType)
-	local response = jsonc.parse(execute("ubus call uci get '" .. jsonc.stringify({
+	local response = jsonc.parse(shell("ubus call uci get '" .. jsonc.stringify({
 		config = config,
 		section = section,
 		option = option,
@@ -203,7 +188,7 @@ local function uciGet(config, section, option, sectionType)
 end
 
 local function interfaceStatus(interface)
-	return jsonc.parse(execute("ubus call network.interface." .. interface .. " status 2>/dev/null"))
+	return jsonc.parse(shell("ubus call network.interface." .. interface .. " status 2>/dev/null"))
 end
 
 local function firewallZoneConfig(zone)
@@ -231,12 +216,12 @@ end
 
 local function iptablesRuleCleanup(table, chain, rule)
 	local escapedRule = string.gsub(rule, "([().%+-*?[^$])", "%%%1")
-	for line in string.gmatch(execute("iptables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
+	for line in string.gmatch(shell("iptables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
 		if string.find(line, escapedRule) then
 			os.execute("iptables -t " .. table .. " -D " .. chain .. " " .. rule)
 		end
 	end
-	for line in string.gmatch(execute("ip6tables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
+	for line in string.gmatch(shell("ip6tables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
 		if string.find(line, escapedRule) then
 			os.execute("ip6tables -t " .. table .. " -D " .. chain .. " " .. rule)
 		end
@@ -340,28 +325,11 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", ingress.rate)
 		.. ";	"
-		.. string.format("%.2f", ingress.lower)
-		.. ";	"
-		.. string.format("%.2f", ingress.upper)
-		.. ";	"
 		.. string.format("%.2f", egress.rate)
 		.. ";	"
-		.. string.format("%.2f", egress.lower)
+		.. string.format("%.2f", ingressDecreaseChance)
 		.. ";	"
-		.. string.format(
-			"%.2f",
-			egress.upper
-		)
-		.. ";	"
-		.. string.format(
-			"%.2f",
-			ingressDecreaseChance
-		)
-		.. ";	"
-		.. string.format(
-			"%.2f",
-			egressDecreaseChance
-		)
+		.. string.format("%.2f", egressDecreaseChance)
 		.. ";"
 
 	if console then
@@ -378,7 +346,7 @@ local function getQdisc(qdisc)
 		return
 	end
 
-	local tc = jsonc.parse(execute("tc -j qdisc show dev " .. qdisc.device))
+	local tc = jsonc.parse(shell("tc -j qdisc show dev " .. qdisc.device))
 
 	if tc[1].kind ~= "cake" or not tonumber(tc[1].options.bandwidth) or not tc[1].handle then
 		qdisc.bandwidth = nil
@@ -441,8 +409,8 @@ local function updatePingStatistics()
 end
 
 local function updateRateStatistics(qdisc)
-	if not qdisc.peak or qdisc.rate > qdisc.peak then
-		qdisc.peak = qdisc.rate
+	if not qdisc.maximum or qdisc.rate > qdisc.maximum then
+		qdisc.maximum = qdisc.rate
 	end
 
 	if qdisc.bandwidth then
@@ -457,34 +425,34 @@ local function updateRateStatistics(qdisc)
 		qdisc.upper = qdisc.rate
 	end
 
-	local maximum
-	local minimum
+	local peak
+	local trough
 	if qdisc.rate > qdisc.last then
-		maximum = qdisc.rate
-		minimum = qdisc.last
+		peak = qdisc.rate
+		trough = qdisc.last
 	else
-		maximum = qdisc.last
-		minimum = qdisc.rate
+		peak = qdisc.last
+		trough = qdisc.rate
 	end
 	qdisc.last = qdisc.rate
 
 	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
 
-	if minimum < qdisc.lower then
-		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * minimum
-	elseif ping.current < ping.baseline then
+	if trough < qdisc.lower then
+		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * trough
+	elseif ping.current > ping.baseline then
+		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * trough
+	else
 		qdisc.lower = qdisc.rate
-	else
-		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * minimum
 	end
-	if maximum < qdisc.upper then
-		qdisc.upper = upperDecreaseResistance * qdisc.upper + (1 - upperDecreaseResistance) * maximum
+	if peak < qdisc.upper then
+		qdisc.upper = upperDecreaseResistance * qdisc.upper + (1 - upperDecreaseResistance) * peak
 	else
-		qdisc.upper = maximum
+		qdisc.upper = peak
 	end
 
 	local assuredProportion = 0.55
-	qdisc.assured = math.min(minimum, qdisc.lower) * (1 - assuredProportion) + qdisc.upper * assuredProportion
+	qdisc.assured = math.min(trough, qdisc.lower) * (1 - assuredProportion) + qdisc.upper * assuredProportion
 end
 
 local function calculateBaseDecreaseChance(qdisc)
@@ -530,16 +498,15 @@ local function adjustDecreaseChance(qdisc, compared)
 		end
 	end
 
-	if qdisc.rate < math.min(qdisc.peak, qdisc.bandwidth) * 0.2 then
-		qdisc.decreaseChance = qdisc.decreaseChance
-			* (qdisc.rate / (math.min(qdisc.peak, qdisc.bandwidth) * 0.2)) ^ 0.5
+	if qdisc.rate < math.min(qdisc.maximum, qdisc.bandwidth) * 0.2 then
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / (math.min(qdisc.maximum, qdisc.bandwidth) * 0.2)) ^ 0.5
 	end
 
 	if compared.utilisation > 1 then
 		if qdisc.deviance < 0.1 then
 			qdisc.decreaseChance = 0
 		elseif qdisc.utilisation < 1 then
-			qdisc.decreaseChance = qdisc.decreaseChance * 0.5 / compared.utilisation
+			qdisc.decreaseChance = qdisc.decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation
 		end
 	end
 end
@@ -554,6 +521,10 @@ local function amplifyDecreaseChanceDifference(qdisc, compared)
 end
 
 local function calculateDecreaseChances()
+	if learningSeconds > 0 then
+		learningSeconds = learningSeconds - interval
+	end
+
 	calculateBaseDecreaseChance(egress)
 	calculateBaseDecreaseChance(ingress)
 
@@ -572,7 +543,7 @@ local function calculateDecrease(qdisc)
 		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 3
 	end
 
-	qdisc.change = (qdisc.bandwidth - math.max(qdisc.peak * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
+	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
 
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
@@ -580,7 +551,7 @@ local function calculateDecrease(qdisc)
 end
 
 local function calculateIncrease(qdisc)
-	local attainedMultiplier = math.max(qdisc.bandwidth * 0.9, qdisc.peak) / qdisc.bandwidth
+	local attainedMultiplier = math.max(qdisc.bandwidth * 0.9, qdisc.maximum) / qdisc.bandwidth
 	if attainedMultiplier < 1 then
 		attainedMultiplier = attainedMultiplier ^ 15
 	end
@@ -665,10 +636,6 @@ local function statisticsInterval()
 	previousTxBytes = txBytes
 	previousRxBytes = rxBytes
 	previousEpoch = intervalEpoch
-
-	if learningSeconds > 0 then
-		learningSeconds = learningSeconds - interval
-	end
 
 	if #ping.times > 0 then
 		ping.current = math.min(table.unpack(ping.times))
@@ -761,15 +728,15 @@ local function pingLoop()
 			.. table.concat(hosts, " ")
 			.. " 2>&1"
 	)
-	pidChild = execute("pgrep -n -x oping -P " .. pid)
-	pidChild = tonumber(pidChild)
+	childPid = shell("pgrep -n -x oping -P " .. pid)
+	childPid = tonumber(childPid)
 
 	repeat
 		local line = fd:read("*line")
 		processPingOutput(line)
 	until not line
 	fd:close()
-	pidChild = nil
+	childPid = nil
 end
 
 local function initialise()
@@ -1000,7 +967,7 @@ local function main()
 
 	log("LOG_NOTICE", "Started for " .. interface .. " (" .. device .. ")")
 
-	learningSeconds = 5
+	learningSeconds = math.ceil(5 / interval)
 	retriesRemaining = retries
 	while retriesRemaining > 0 do
 		pingLoop()
