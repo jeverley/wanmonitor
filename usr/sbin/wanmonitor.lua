@@ -214,16 +214,16 @@ local function interfaceReconnect(interface)
 	os.exit()
 end
 
-local function iptablesRuleCleanup(table, chain, rule)
+local function iptablesRuleCleanup(tableName, chain, rule)
 	local escapedRule = string.gsub(rule, "([().%+-*?[^$])", "%%%1")
-	for line in string.gmatch(shell("iptables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
+	for line in string.gmatch(shell("iptables -t " .. tableName .. " -S " .. chain), "([^\n]*)\n?") do
 		if string.find(line, escapedRule) then
-			os.execute("iptables -t " .. table .. " -D " .. chain .. " " .. rule)
+			os.execute("iptables -t " .. tableName .. " -D " .. chain .. " " .. rule)
 		end
 	end
-	for line in string.gmatch(shell("ip6tables -t " .. table .. " -S " .. chain), "([^\n]*)\n?") do
+	for line in string.gmatch(shell("ip6tables -t " .. tableName .. " -S " .. chain), "([^\n]*)\n?") do
 		if string.find(line, escapedRule) then
-			os.execute("ip6tables -t " .. table .. " -D " .. chain .. " " .. rule)
+			os.execute("ip6tables -t " .. tableName .. " -D " .. chain .. " " .. rule)
 		end
 	end
 end
