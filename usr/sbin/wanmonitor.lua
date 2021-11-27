@@ -330,6 +330,10 @@ local function adjustmentLog()
 		.. string.format("%.2f", ingressDecreaseChance)
 		.. ";	"
 		.. string.format("%.2f", egressDecreaseChance)
+		.. ";	"
+		.. string.format("%.2f", egress.maximum)
+		.. ";	"
+		.. string.format("%.2f", ingress.maximum)
 		.. ";"
 
 	if console then
@@ -414,6 +418,8 @@ end
 local function updateRateStatistics(qdisc)
 	if not qdisc.maximum or qdisc.rate > qdisc.maximum then
 		qdisc.maximum = qdisc.rate
+	else
+		qdisc.maximum = maximumDecreaseResistance * qdisc.maximum + (1 - maximumDecreaseResistance) * qdisc.rate
 	end
 
 	if qdisc.bandwidth then
@@ -585,7 +591,6 @@ local function calculateChange(qdisc)
 	if
 		ping.clear > stableTime
 		and math.random(1, 100) <= 75 * interval
-		and (qdisc.assured > qdisc.bandwidth * 0.98 or qdisc.utilisation < 0.7)
 	then
 		calculateIncrease(qdisc)
 		return
@@ -910,6 +915,7 @@ local function initialise()
 	lowerDecreaseStepTime = 2
 	lowerIncreaseStepTime = 10
 	upperDecreaseStepTime = 1
+	maximumDecreaseStepTime = 300
 
 	if config.mssJitterClamp then
 		config.mssJitterClamp = toboolean(config.mssJitterClamp)
@@ -943,6 +949,7 @@ local function initialise()
 
 	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
 	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
+	maximumDecreaseResistance = math.exp(math.log(0.5) / (maximumDecreaseStepTime / interval))
 	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
 end
 
