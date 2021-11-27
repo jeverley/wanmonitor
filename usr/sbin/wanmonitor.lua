@@ -34,10 +34,10 @@ local logfile
 local mssJitterClamp
 local reconnect
 local rtt
-local highResistance
-local highResistanceStepTime
-local lowResistance
-local lowResistanceStepTime
+local lowerDecreaseStepTime
+local lowerIncreaseStepTime
+local upperDecreaseStepTime
+local maximumDecreaseStepTime
 local learningSeconds
 local stableTime
 local verbose
@@ -333,7 +333,10 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.maximum)
 		.. ";	"
-		.. string.format("%.2f", ingress.maximum)
+		.. string.format(
+			"%.2f",
+			ingress.maximum
+		)
 		.. ";"
 
 	if console then
@@ -508,7 +511,8 @@ local function adjustDecreaseChance(qdisc, compared)
 	end
 
 	if qdisc.rate < math.min(qdisc.maximum, qdisc.bandwidth) * 0.2 then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / (math.min(qdisc.maximum, qdisc.bandwidth) * 0.2)) ^ 0.5
+		qdisc.decreaseChance = qdisc.decreaseChance
+			* (qdisc.rate / (math.min(qdisc.maximum, qdisc.bandwidth) * 0.2)) ^ 0.5
 	end
 
 	if compared.utilisation > 1 then
@@ -588,10 +592,7 @@ local function calculateChange(qdisc)
 		return
 	end
 
-	if
-		ping.clear > stableTime
-		and math.random(1, 100) <= 75 * interval
-	then
+	if ping.clear > stableTime and math.random(1, 100) <= 75 * interval then
 		calculateIncrease(qdisc)
 		return
 	end
@@ -914,7 +915,7 @@ local function initialise()
 	stableTime = 0.5
 	lowerDecreaseStepTime = 2
 	lowerIncreaseStepTime = 10
-	upperDecreaseStepTime = 1
+	upperDecreaseStepTime = 2
 	maximumDecreaseStepTime = 300
 
 	if config.mssJitterClamp then
