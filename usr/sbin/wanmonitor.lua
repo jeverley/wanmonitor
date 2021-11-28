@@ -956,6 +956,7 @@ local function initialise()
 
 	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
 	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
+	learningSeconds = math.ceil(lowerIncreaseStepTime / 3 / interval)
 	maximumDecreaseResistance = math.exp(math.log(0.5) / (maximumDecreaseStepTime / interval))
 	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
 end
@@ -984,7 +985,6 @@ local function main()
 
 	log("LOG_NOTICE", "Started for " .. interface .. " (" .. device .. ")")
 
-	learningSeconds = math.ceil(lowerIncreaseStepTime / 3 / interval)
 	retriesRemaining = retries
 	while retriesRemaining > 0 do
 		pingLoop()
