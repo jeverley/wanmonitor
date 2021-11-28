@@ -505,6 +505,10 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
+	if compared.utilisation > 1 and qdisc.utilisation < 1 then
+		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation
+	end
+
 	if ping.latent == interval then
 		if qdisc.rate < qdisc.assured then
 			qdisc.decreaseChance = 0
@@ -514,23 +518,15 @@ local function adjustDecreaseChance(qdisc, compared)
 		end
 	end
 
-	if qdisc.rate < qdisc.assured * 0.5 then
-		qdisc.decreaseChance = qdisc.decreaseChance * 0.2
-	elseif compared.rate < compared.assured * 0.5 then
-		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
-	end
-
-	local background = math.min(qdisc.maximum, qdisc.bandwidth) * 0.2
+	local background = math.min(qdisc.bandwidth, qdisc.maximum) * 0.2
 	if qdisc.rate < background then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / background) ^ 0.5
 	end
 
-	if compared.utilisation > 1 then
-		if qdisc.deviance < 0.1 then
-			qdisc.decreaseChance = 0
-		elseif qdisc.utilisation < 1 then
-			qdisc.decreaseChance = qdisc.decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation
-		end
+	if qdisc.rate < qdisc.assured * 0.5 then
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.2
+	elseif compared.rate < compared.assured * 0.5 then
+		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	end
 end
 
