@@ -922,7 +922,7 @@ local function initialise()
 	lowerDecreaseStepTime = 2
 	lowerIncreaseStepTime = 10
 	upperDecreaseStepTime = 2
-	maximumDecreaseStepTime = 150
+	maximumDecreaseStepTime = 60
 
 	if config.mssJitterClamp then
 		config.mssJitterClamp = toboolean(config.mssJitterClamp)
