@@ -39,9 +39,13 @@ local mssJitterClamp
 local reconnect
 local rtt
 local lowerDecreaseStepTime
+local lowerDecreaseResistance
 local lowerIncreaseStepTime
-local upperDecreaseStepTime
+local lowerIncreaseResistance
 local maximumDecreaseStepTime
+local maximumDecreaseResistance
+local upperDecreaseStepTime
+local upperDecreaseResistance
 local learningSeconds
 local stableTime
 local verbose
@@ -331,11 +335,11 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egressDecreaseChance)
 		.. ";	"
-		.. string.format("%.2f", egress.maximum)
+		.. string.format("%.2f", ingress.maximum)
 		.. ";	"
 		.. string.format(
 			"%.2f",
-			ingress.maximum
+			egress.maximum
 		)
 		.. ";"
 
@@ -922,7 +926,7 @@ local function initialise()
 	lowerDecreaseStepTime = 2
 	lowerIncreaseStepTime = 10
 	upperDecreaseStepTime = 2
-	maximumDecreaseStepTime = 300
+	maximumDecreaseStepTime = 150
 
 	if config.mssJitterClamp then
 		config.mssJitterClamp = toboolean(config.mssJitterClamp)
