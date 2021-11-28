@@ -516,9 +516,9 @@ local function adjustDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	end
 
-	if qdisc.rate < math.min(qdisc.maximum, qdisc.bandwidth) * 0.2 then
-		qdisc.decreaseChance = qdisc.decreaseChance
-			* (qdisc.rate / (math.min(qdisc.maximum, qdisc.bandwidth) * 0.2)) ^ 0.5
+	local background = math.min(qdisc.maximum, qdisc.bandwidth) * 0.2
+	if qdisc.rate < background then
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / background) ^ 0.5
 	end
 
 	if compared.utilisation > 1 then
