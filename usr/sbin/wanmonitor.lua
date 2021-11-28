@@ -14,6 +14,10 @@ local syslog = require("posix.syslog")
 local systime = require("posix.sys.time")
 local unistd = require("posix.unistd")
 
+if not table.unpack then
+	table.unpack = unpack
+end
+
 local egress
 local device
 local ingress
@@ -51,10 +55,6 @@ local previousTxBytes
 local responseCount
 local retries
 local retriesRemaining
-
-if not table.unpack then
-	table.unpack = unpack
-end
 
 local function log(priority, message)
 	if console then
@@ -496,18 +496,24 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
-	if qdisc.rate < qdisc.assured * 0.5 then
-		qdisc.decreaseChance = qdisc.decreaseChance * 0.2
-	elseif compared.rate < compared.assured * 0.5 then
-		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
+	if qdisc.assured > qdisc.bandwidth then
+		qdisc.decreaseChance = 0
+		return
 	end
 
 	if ping.latent == interval then
 		if qdisc.rate < qdisc.assured then
 			qdisc.decreaseChance = 0
+			return
 		else
 			qdisc.decreaseChance = qdisc.decreaseChance * 0.2
 		end
+	end
+
+	if qdisc.rate < qdisc.assured * 0.5 then
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.2
+	elseif compared.rate < compared.assured * 0.5 then
+		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	end
 
 	if qdisc.rate < math.min(qdisc.maximum, qdisc.bandwidth) * 0.2 then
