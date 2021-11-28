@@ -984,7 +984,7 @@ local function main()
 
 	log("LOG_NOTICE", "Started for " .. interface .. " (" .. device .. ")")
 
-	learningSeconds = math.ceil(5 / interval)
+	learningSeconds = math.ceil(lowerIncreaseStepTime / 3 / interval)
 	retriesRemaining = retries
 	while retriesRemaining > 0 do
 		pingLoop()
