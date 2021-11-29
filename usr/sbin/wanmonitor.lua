@@ -413,7 +413,7 @@ local function updatePingStatistics()
 		ping.baseline = streamingMedian(ping, ping.current, interval * 0.2)
 	end
 	ping.limit = ping.baseline + 5
-	ping.ceiling = 70
+	ping.ceiling = ping.baseline + 70
 
 	if ping.current > ping.limit then
 		ping.clear = 0
@@ -522,10 +522,10 @@ local function adjustDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.lower)
 	end
 
-	if ping.current > ping.baseline + ping.ceiling then
+	if ping.current > ping.ceiling then
 		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	else
-		qdisc.decreaseChance = qdisc.decreaseChance * ((ping.delta - 5) / ping.ceiling)
+		qdisc.decreaseChance = qdisc.decreaseChance * ping.delta / (ping.ceiling - ping.baseline)
 	end
 
 	if ping.latent == interval then
