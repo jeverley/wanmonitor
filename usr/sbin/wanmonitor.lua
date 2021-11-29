@@ -38,10 +38,12 @@ local logfile
 local mssJitterClamp
 local reconnect
 local rtt
-local lowerDecreaseStepTime
 local lowerDecreaseResistance
-local maximumDecreaseStepTime
+local lowerDecreaseStepTime
+local lowerIncreaseResistance
+local lowerIncreaseStepTime
 local maximumDecreaseResistance
+local maximumDecreaseStepTime
 local upperDecreaseStepTime
 local upperDecreaseResistance
 local learningSeconds
@@ -446,17 +448,17 @@ local function updateRateStatistics(qdisc)
 	local trough
 	if qdisc.rate > qdisc.last then
 		peak = qdisc.rate
-		trough = qdisc.last
+		trough = (qdisc.last + qdisc.rate) * 0.5
 	else
-		peak = qdisc.last
+		peak = (qdisc.last + qdisc.rate) * 0.5
 		trough = qdisc.rate
 	end
 	qdisc.last = qdisc.rate
 
 	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
 
-	if ping.clear > stableSeconds and qdisc.rate > qdisc.lower then
-		qdisc.lower = qdisc.rate
+	if ping.current < ping.limit and qdisc.rate * 0.9 > qdisc.lower then
+		qdisc.lower = qdisc.rate * 0.9
 	elseif trough < qdisc.lower then
 		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * trough
 	else
@@ -520,9 +522,7 @@ local function adjustDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.lower)
 	end
 
-	if ping.current < ping.ceiling then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 3
-	else
+	if ping.current > ping.ceiling then
 		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	end
 
@@ -917,7 +917,7 @@ local function initialise()
 	rtt = 50
 	stableSeconds = 0.5
 	lowerDecreaseStepTime = 0.5
-	lowerIncreaseStepTime = 1
+	lowerIncreaseStepTime = 2
 	maximumDecreaseStepTime = 60
 	upperDecreaseStepTime = 0.5
 
