@@ -469,7 +469,7 @@ local function updateRateStatistics(qdisc)
 	end
 
 	local assuredProportion = 0.2
-	local assuredFloor = math.max(math.min(qdisc.lower, trough), qdisc.rate * 0.5)
+	local assuredFloor = math.max(math.min(qdisc.lower, trough), qdisc.rate * 0.7)
 	qdisc.assured = (1 - assuredProportion) * assuredFloor + assuredProportion * qdisc.upper
 end
 
@@ -917,7 +917,7 @@ local function initialise()
 	rtt = 50
 	stableSeconds = 0.5
 	lowerDecreaseStepTime = 0.5
-	lowerIncreaseStepTime = 0.5
+	lowerIncreaseStepTime = 1
 	maximumDecreaseStepTime = 60
 	upperDecreaseStepTime = 0.5
 
