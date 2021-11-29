@@ -471,7 +471,7 @@ local function updateRateStatistics(qdisc)
 	end
 
 	local assuredProportion = 0.55
-	qdisc.assured = (1 - assuredProportion) * math.min(trough, qdisc.lower) + assuredProportion * qdisc.upper
+	qdisc.assured = (1 - assuredProportion) * math.min(qdisc.lower, trough) + assuredProportion * qdisc.upper
 end
 
 local function calculateBaseDecreaseChance(qdisc)
@@ -508,8 +508,11 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
-	if ping.latent == interval and qdisc.rate > qdisc.assured then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.bandwidth - qdisc.rate) / (qdisc.bandwidth - qdisc.assured)
+	if ping.latent == interval then
+		if qdisc.rate > qdisc.assured then
+			qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.bandwidth - qdisc.rate) / (qdisc.bandwidth - qdisc.assured)
+		end
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.8
 	end
 
 	if compared.utilisation > 1 and qdisc.utilisation < 1 then
@@ -918,7 +921,7 @@ local function initialise()
 	rtt = 50
 	stableSeconds = 0.5
 	lowerDecreaseStepTime = 1
-	lowerIncreaseStepTime = 10
+	lowerIncreaseStepTime = 5
 	upperDecreaseStepTime = 1
 	maximumDecreaseStepTime = 60
 
