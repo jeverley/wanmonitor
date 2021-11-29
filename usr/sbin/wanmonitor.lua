@@ -525,7 +525,7 @@ local function adjustDecreaseChance(qdisc, compared)
 	end
 
 	if qdisc.rate < qdisc.lower then
-		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.lower)
 	end
 end
 
