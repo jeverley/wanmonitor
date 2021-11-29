@@ -460,7 +460,7 @@ local function updateRateStatistics(qdisc)
 	elseif trough < qdisc.lower then
 		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * trough
 	else
-		qdisc.lower = trough
+		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * trough
 	end
 	if peak < qdisc.upper then
 		qdisc.upper = upperDecreaseResistance * qdisc.upper + (1 - upperDecreaseResistance) * peak
@@ -519,6 +519,12 @@ local function adjustDecreaseChance(qdisc, compared)
 	if qdisc.rate < qdisc.lower then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.lower)
 	end
+
+	if ping.current < ping.ceiling then
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 3
+	else
+		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
+	end
 end
 
 local function amplifyDecreaseChanceDifference(qdisc, compared)
@@ -528,18 +534,6 @@ local function amplifyDecreaseChanceDifference(qdisc, compared)
 
 	local amplify = 2
 	qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
-end
-
-local function pingAdjustDecreaseChance(qdisc)
-	if not qdisc.decreaseChance then
-		return
-	end
-
-	if ping.current < ping.ceiling then
-		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 3
-	else
-		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
-	end
 end
 
 local function calculateDecreaseChances()
@@ -558,9 +552,6 @@ local function calculateDecreaseChances()
 
 	amplifyDecreaseChanceDifference(egress, ingress)
 	amplifyDecreaseChanceDifference(ingress, egress)
-
-	pingAdjustDecreaseChance(egress)
-	pingAdjustDecreaseChance(ingress)
 end
 
 local function calculateDecrease(qdisc)
@@ -922,6 +913,7 @@ local function initialise()
 	rtt = 50
 	stableSeconds = 0.5
 	lowerDecreaseStepTime = 0.5
+	lowerIncreaseStepTime = 0.5
 	upperDecreaseStepTime = 0.5
 	maximumDecreaseStepTime = 60
 
@@ -957,6 +949,7 @@ local function initialise()
 
 	learningSeconds = math.ceil(2 / interval)
 	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
+	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
 	maximumDecreaseResistance = math.exp(math.log(0.5) / (maximumDecreaseStepTime / interval))
 	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
 end
