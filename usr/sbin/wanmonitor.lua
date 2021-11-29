@@ -470,7 +470,7 @@ local function updateRateStatistics(qdisc)
 		qdisc.upper = peak
 	end
 
-	local assuredProportion = 0.55
+	local assuredProportion = 0.2
 	qdisc.assured = (1 - assuredProportion) * math.min(qdisc.lower, trough) + assuredProportion * qdisc.upper
 end
 
@@ -509,7 +509,7 @@ local function adjustDecreaseChance(qdisc, compared)
 	end
 
 	if ping.latent == interval then
-		if qdisc.rate > qdisc.assured then
+		if qdisc.rate > qdisc.assured and qdisc.rate < qdisc.bandwidth then
 			qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.bandwidth - qdisc.rate) / (qdisc.bandwidth - qdisc.assured)
 		end
 		qdisc.decreaseChance = qdisc.decreaseChance * 0.8
@@ -918,9 +918,9 @@ local function initialise()
 	mssJitterClamp = false
 	rtt = 50
 	stableSeconds = 0.5
-	lowerDecreaseStepTime = 1
-	lowerIncreaseStepTime = 5
-	upperDecreaseStepTime = 1
+	lowerDecreaseStepTime = 0.5
+	lowerIncreaseStepTime = 0.5
+	upperDecreaseStepTime = 0.5
 	maximumDecreaseStepTime = 60
 
 	if config.mssJitterClamp then
@@ -953,9 +953,9 @@ local function initialise()
 		end
 	end
 
+	learningSeconds = math.ceil(lowerIncreaseStepTime / 3 / interval)
 	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
 	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
-	learningSeconds = math.ceil(lowerIncreaseStepTime / 3 / interval)
 	maximumDecreaseResistance = math.exp(math.log(0.5) / (maximumDecreaseStepTime / interval))
 	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
 end
