@@ -524,10 +524,8 @@ local function adjustDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / background) ^ 0.5
 	end
 
-	if qdisc.rate < qdisc.assured * 0.5 then
-		qdisc.decreaseChance = qdisc.decreaseChance * 0.2
-	elseif compared.rate < compared.assured * 0.5 then
-		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
+	if qdisc.rate < qdisc.lower then
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
 	end
 end
 
