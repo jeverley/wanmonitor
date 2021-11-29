@@ -40,8 +40,6 @@ local reconnect
 local rtt
 local lowerDecreaseStepTime
 local lowerDecreaseResistance
-local lowerIncreaseStepTime
-local lowerIncreaseResistance
 local maximumDecreaseStepTime
 local maximumDecreaseResistance
 local upperDecreaseStepTime
@@ -461,8 +459,8 @@ local function updateRateStatistics(qdisc)
 		qdisc.lower = qdisc.rate
 	elseif trough < qdisc.lower then
 		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * trough
-	elseif trough > qdisc.lower then
-		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * trough
+	else
+		qdisc.lower = trough
 	end
 	if peak < qdisc.upper then
 		qdisc.upper = upperDecreaseResistance * qdisc.upper + (1 - upperDecreaseResistance) * peak
@@ -919,7 +917,6 @@ local function initialise()
 	rtt = 50
 	stableSeconds = 0.5
 	lowerDecreaseStepTime = 0.5
-	lowerIncreaseStepTime = 0.5
 	upperDecreaseStepTime = 0.5
 	maximumDecreaseStepTime = 60
 
@@ -953,9 +950,8 @@ local function initialise()
 		end
 	end
 
-	learningSeconds = math.ceil(lowerIncreaseStepTime / 3 / interval)
+	learningSeconds = math.ceil(2 / interval)
 	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
-	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
 	maximumDecreaseResistance = math.exp(math.log(0.5) / (maximumDecreaseStepTime / interval))
 	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
 end
