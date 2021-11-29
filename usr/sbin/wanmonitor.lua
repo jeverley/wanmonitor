@@ -508,7 +508,7 @@ local function adjustDecreaseChance(qdisc, compared)
 	end
 
 	if compared.utilisation > 1 and qdisc.utilisation < 1 then
-		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation
+		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation ^ 2
 	end
 
 	local background = math.min(qdisc.bandwidth, qdisc.maximum) * 0.2
@@ -524,6 +524,10 @@ local function adjustDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance * (ping.current / ping.ceiling) ^ 3
 	else
 		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
+	end
+
+	if ping.latent == interval then
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
 	end
 end
 
@@ -914,8 +918,8 @@ local function initialise()
 	stableSeconds = 0.5
 	lowerDecreaseStepTime = 0.5
 	lowerIncreaseStepTime = 0.5
-	upperDecreaseStepTime = 0.5
 	maximumDecreaseStepTime = 60
+	upperDecreaseStepTime = 0.5
 
 	if config.mssJitterClamp then
 		config.mssJitterClamp = toboolean(config.mssJitterClamp)
