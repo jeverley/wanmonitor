@@ -47,7 +47,7 @@ local maximumDecreaseResistance
 local upperDecreaseStepTime
 local upperDecreaseResistance
 local learningSeconds
-local stableTime
+local stableSeconds
 local verbose
 
 local hostCount
@@ -331,15 +331,18 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.rate)
 		.. ";	"
-		.. string.format("%.2f", ingressDecreaseChance)
+		.. string.format("%.2f", ingress.lower)
 		.. ";	"
-		.. string.format("%.2f", egressDecreaseChance)
-		.. ";	"
-		.. string.format("%.2f", ingress.maximum)
+		.. string.format("%.2f", egress.lower)
 		.. ";	"
 		.. string.format(
 			"%.2f",
-			egress.maximum
+			ingressDecreaseChance
+		)
+		.. ";	"
+		.. string.format(
+			"%.2f",
+			egressDecreaseChance
 		)
 		.. ";"
 
@@ -407,7 +410,7 @@ local function updatePingStatistics()
 	ping.delta = ping.current - ping.baseline
 
 	if #ping.times > 0 then
-		ping.baseline = streamingMedian(ping, ping.current, 0.1)
+		ping.baseline = streamingMedian(ping, ping.current, interval * 0.2)
 	end
 	ping.limit = ping.baseline + 5
 	ping.ceiling = ping.baseline + 70
@@ -454,12 +457,12 @@ local function updateRateStatistics(qdisc)
 
 	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
 
-	if trough < qdisc.lower then
-		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * trough
-	elseif ping.current > ping.baseline then
-		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * trough
-	else
+	if ping.current < ping.limit and qdisc.rate > qdisc.lower then
 		qdisc.lower = qdisc.rate
+	elseif trough < qdisc.lower then
+		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * trough
+	elseif trough > qdisc.lower then
+		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * trough
 	end
 	if peak < qdisc.upper then
 		qdisc.upper = upperDecreaseResistance * qdisc.upper + (1 - upperDecreaseResistance) * peak
@@ -505,17 +508,12 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
-	if compared.utilisation > 1 and qdisc.utilisation < 1 then
-		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation
+	if ping.latent == interval and qdisc.rate > qdisc.assured then
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.bandwidth - qdisc.rate) / (qdisc.bandwidth - qdisc.assured)
 	end
 
-	if ping.latent == interval then
-		if qdisc.rate < qdisc.assured then
-			qdisc.decreaseChance = 0
-			return
-		else
-			qdisc.decreaseChance = qdisc.decreaseChance * 0.2
-		end
+	if compared.utilisation > 1 and qdisc.utilisation < 1 then
+		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation
 	end
 
 	local background = math.min(qdisc.bandwidth, qdisc.maximum) * 0.2
@@ -570,9 +568,9 @@ local function calculateDecrease(qdisc)
 end
 
 local function calculateIncrease(qdisc)
-	local attainedMultiplier = math.max(qdisc.bandwidth * 0.9, qdisc.maximum) / qdisc.bandwidth
-	if attainedMultiplier < 1 then
-		attainedMultiplier = attainedMultiplier ^ 15
+	local attainedMultiplier = 1
+	if qdisc.maximum > qdisc.bandwidth then
+		attainedMultiplier = qdisc.maximum / qdisc.bandwidth
 	end
 
 	local idleMultiplier = 0.3
@@ -598,7 +596,7 @@ local function calculateChange(qdisc)
 		return
 	end
 
-	if ping.clear > stableTime and math.random(1, 100) <= 75 * interval then
+	if ping.clear > stableSeconds and math.random(1, 100) <= 75 * interval then
 		calculateIncrease(qdisc)
 		return
 	end
@@ -918,10 +916,10 @@ local function initialise()
 
 	mssJitterClamp = false
 	rtt = 50
-	stableTime = 0.5
-	lowerDecreaseStepTime = 2
+	stableSeconds = 0.5
+	lowerDecreaseStepTime = 1
 	lowerIncreaseStepTime = 10
-	upperDecreaseStepTime = 2
+	upperDecreaseStepTime = 1
 	maximumDecreaseStepTime = 60
 
 	if config.mssJitterClamp then
@@ -944,13 +942,13 @@ local function initialise()
 		end
 	end
 
-	if config.stableTime then
-		config.stableTime = tonumber(config.stableTime)
-		if not config.stableTime or config.stableTime <= 0 then
-			log("LOG_ERR", "Invalid stableTime config value specified for " .. interface)
+	if config.stableSeconds then
+		config.stableSeconds = tonumber(config.stableSeconds)
+		if not config.stableSeconds or config.stableSeconds <= 0 then
+			log("LOG_ERR", "Invalid stableSeconds config value specified for " .. interface)
 			os.exit()
 		else
-			stableTime = config.stableTime
+			stableSeconds = config.stableSeconds
 		end
 	end
 
