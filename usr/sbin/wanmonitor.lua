@@ -331,9 +331,16 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.rate)
 		.. ";	"
-		.. string.format("%.2f", ingress.lower)
+		.. string.format("%.2f", ingress.assured)
 		.. ";	"
-		.. string.format("%.2f", egress.lower)
+		.. string.format("%.2f", egress.assured)
+		.. ";	"
+		.. string.format("%.2f", ingress.deviance)
+		.. ";	"
+		.. string.format(
+			"%.2f",
+			egress.deviance
+		)
 		.. ";	"
 		.. string.format(
 			"%.2f",
@@ -425,24 +432,43 @@ local function updatePingStatistics()
 	ping.latent = 0
 end
 
-local function updateRateStatistics(qdisc)
-	if not qdisc.maximum or qdisc.rate > qdisc.maximum then
-		qdisc.maximum = qdisc.rate
-	else
-		qdisc.maximum = maximumDecreaseResistance * qdisc.maximum + (1 - maximumDecreaseResistance) * qdisc.rate
-	end
+interval = 0.5
+lowerDecreaseStepTime = 2
+lowerIncreaseStepTime = 0.5
+maximumDecreaseStepTime = 60
+upperDecreaseStepTime = 2
+lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
+lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
+maximumDecreaseResistance = math.exp(math.log(0.5) / (maximumDecreaseStepTime / interval))
+upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
 
+local function updateRateStatistics(qdisc)
 	if qdisc.bandwidth then
 		qdisc.utilisation = qdisc.rate / qdisc.bandwidth
 	else
 		qdisc.utilisation = 0
 	end
 
+	local maximum
+	if ping.current < ping.limit then
+		maximum = qdisc.rate
+	else
+		maximum = qdisc.rate * 0.7
+	end
+
+	if not qdisc.maximum or maximum > qdisc.maximum then
+		qdisc.maximum = maximum
+	else
+		qdisc.maximum = maximumDecreaseResistance * qdisc.maximum + (1 - maximumDecreaseResistance) * maximum
+	end
+	
 	if not qdisc.last then
-		qdisc.last = qdisc.rate * 0.5
-		qdisc.lower = qdisc.rate * 0.5
+		qdisc.last = qdisc.rate
+		qdisc.lower = qdisc.rate
 		qdisc.upper = qdisc.rate
 	end
+
+	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
 
 	local peak
 	local trough
@@ -455,10 +481,8 @@ local function updateRateStatistics(qdisc)
 	end
 	qdisc.last = qdisc.rate
 
-	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
-
-	if ping.current < ping.limit and qdisc.rate * 0.9 > qdisc.lower then
-		qdisc.lower = qdisc.rate * 0.9
+	if ping.current < ping.limit and qdisc.rate > qdisc.lower then
+		qdisc.lower = qdisc.rate
 	elseif trough < qdisc.lower then
 		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * trough
 	else
@@ -470,37 +494,14 @@ local function updateRateStatistics(qdisc)
 		qdisc.upper = peak
 	end
 
-	local assuredProportion = 0.2
-	local assuredFloor = math.max(math.min(qdisc.lower, trough), qdisc.rate * 0.7)
+	local assuredProportion = 0.1
+	local assuredFloor = math.max(math.min(qdisc.lower, trough), qdisc.rate * 0.7) * 0.9
 	qdisc.assured = (1 - assuredProportion) * assuredFloor + assuredProportion * qdisc.upper
 end
 
-local function calculateBaseDecreaseChance(qdisc)
-	if not qdisc.bandwidth or ping.current < ping.limit or learningSeconds > 0 then
+local function calculateDecreaseChance(qdisc, compared)
+	if not qdisc.bandwidth or ping.current < ping.limit then
 		qdisc.decreaseChance = nil
-		return
-	end
-
-	qdisc.decreaseChance = qdisc.deviance
-end
-
-local function normaliseDecreaseChance(qdisc, compared)
-	if not qdisc.decreaseChance then
-		return
-	end
-
-	if not compared.decreaseChance then
-		if qdisc.decreaseChance > 1 then
-			qdisc.decreaseChance = 1
-		end
-	elseif qdisc.decreaseChance > compared.decreaseChance and qdisc.decreaseChance > 1 then
-		compared.decreaseChance = compared.decreaseChance / qdisc.decreaseChance
-		qdisc.decreaseChance = 1
-	end
-end
-
-local function adjustDecreaseChance(qdisc, compared)
-	if not qdisc.decreaseChance then
 		return
 	end
 
@@ -509,28 +510,45 @@ local function adjustDecreaseChance(qdisc, compared)
 		return
 	end
 
+	local devianceChance = 1
+	if qdisc.deviance < compared.deviance then
+		devianceChance = (qdisc.deviance / compared.deviance)
+	end
+	if qdisc.deviance < 1 then
+		devianceChance = devianceChance * qdisc.deviance
+	end
+
+	local decreaseChance = 1
+	decreaseChance = decreaseChance * 0.5 + devianceChance * 0.5
+
 	if compared.utilisation > 1 and qdisc.utilisation < 1 then
-		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation ^ 2
+		decreaseChance = decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation ^ 2
 	end
 
 	local background = math.min(qdisc.bandwidth, qdisc.maximum) * 0.2
 	if qdisc.rate < background then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / background) ^ 0.5
+		decreaseChance = decreaseChance * (qdisc.rate / background) ^ 0.5
 	end
 
 	if qdisc.rate < qdisc.lower then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.lower)
+		decreaseChance = decreaseChance * 0.5 * (qdisc.rate / qdisc.lower)
+	end
+
+	if qdisc.rate < qdisc.maximum then
+		decreaseChance = decreaseChance * (qdisc.rate / qdisc.maximum)
 	end
 
 	if ping.current > ping.ceiling then
-		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
+		decreaseChance = decreaseChance ^ 0.5
 	else
-		qdisc.decreaseChance = qdisc.decreaseChance * ping.delta / (ping.ceiling - ping.baseline)
+		decreaseChance = decreaseChance * ping.delta / (ping.ceiling - ping.baseline)
 	end
 
 	if ping.latent == interval then
-		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
+		decreaseChance = decreaseChance * 0.5
 	end
+
+	qdisc.decreaseChance = decreaseChance
 end
 
 local function amplifyDecreaseChanceDifference(qdisc, compared)
@@ -547,14 +565,8 @@ local function calculateDecreaseChances()
 		learningSeconds = learningSeconds - interval
 	end
 
-	calculateBaseDecreaseChance(egress)
-	calculateBaseDecreaseChance(ingress)
-
-	normaliseDecreaseChance(egress, ingress)
-	normaliseDecreaseChance(ingress, egress)
-
-	adjustDecreaseChance(egress, ingress)
-	adjustDecreaseChance(ingress, egress)
+	calculateDecreaseChance(egress, ingress)
+	calculateDecreaseChance(ingress, egress)
 
 	amplifyDecreaseChanceDifference(egress, ingress)
 	amplifyDecreaseChanceDifference(ingress, egress)
@@ -918,10 +930,6 @@ local function initialise()
 	mssJitterClamp = false
 	rtt = 50
 	stableSeconds = 0.5
-	lowerDecreaseStepTime = 1
-	lowerIncreaseStepTime = 2
-	maximumDecreaseStepTime = 60
-	upperDecreaseStepTime = 0.5
 
 	if config.mssJitterClamp then
 		config.mssJitterClamp = toboolean(config.mssJitterClamp)
@@ -954,10 +962,6 @@ local function initialise()
 	end
 
 	learningSeconds = math.ceil(2 / interval)
-	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
-	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
-	maximumDecreaseResistance = math.exp(math.log(0.5) / (maximumDecreaseStepTime / interval))
-	upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
 end
 
 local function daemonise()
