@@ -44,8 +44,6 @@ local lowerIncreaseResistance
 local lowerIncreaseStepTime
 local maximumDecreaseResistance
 local maximumDecreaseStepTime
-local upperDecreaseStepTime
-local upperDecreaseResistance
 local learningSeconds
 local stableSeconds
 local verbose
@@ -432,16 +430,6 @@ local function updatePingStatistics()
 	ping.latent = 0
 end
 
-interval = 0.5
-lowerDecreaseStepTime = 2
-lowerIncreaseStepTime = 0.5
-maximumDecreaseStepTime = 60
-upperDecreaseStepTime = 2
-lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
-lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
-maximumDecreaseResistance = math.exp(math.log(0.5) / (maximumDecreaseStepTime / interval))
-upperDecreaseResistance = math.exp(math.log(0.5) / (upperDecreaseStepTime / interval))
-
 local function updateRateStatistics(qdisc)
 	if qdisc.bandwidth then
 		qdisc.utilisation = qdisc.rate / qdisc.bandwidth
@@ -465,7 +453,6 @@ local function updateRateStatistics(qdisc)
 	if not qdisc.last then
 		qdisc.last = qdisc.rate
 		qdisc.lower = qdisc.rate
-		qdisc.upper = qdisc.rate
 	end
 
 	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
@@ -481,22 +468,13 @@ local function updateRateStatistics(qdisc)
 	end
 	qdisc.last = qdisc.rate
 
-	if ping.current < ping.limit and qdisc.rate > qdisc.lower then
-		qdisc.lower = qdisc.rate
-	elseif trough < qdisc.lower then
+	if trough < qdisc.lower then
 		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * trough
 	else
 		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * trough
 	end
-	if peak < qdisc.upper then
-		qdisc.upper = upperDecreaseResistance * qdisc.upper + (1 - upperDecreaseResistance) * peak
-	else
-		qdisc.upper = peak
-	end
 
-	local assuredProportion = 0.1
-	local assuredFloor = math.max(math.min(qdisc.lower, trough), qdisc.rate * 0.7) * 0.9
-	qdisc.assured = (1 - assuredProportion) * assuredFloor + assuredProportion * qdisc.upper
+	qdisc.assured = math.max(math.min(qdisc.lower, trough), qdisc.rate * 0.7)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
@@ -927,6 +905,10 @@ local function initialise()
 		ingress.device = config.ingressDevice
 	end
 
+	interval = 0.5
+	lowerDecreaseStepTime = 2
+	lowerIncreaseStepTime = 0.5
+	maximumDecreaseStepTime = 60
 	mssJitterClamp = false
 	rtt = 50
 	stableSeconds = 0.5
@@ -962,6 +944,9 @@ local function initialise()
 	end
 
 	learningSeconds = math.ceil(2 / interval)
+	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
+	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
+	maximumDecreaseResistance = math.exp(math.log(0.5) / (maximumDecreaseStepTime / interval))
 end
 
 local function daemonise()
