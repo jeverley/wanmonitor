@@ -457,13 +457,10 @@ local function updateRateStatistics(qdisc)
 
 	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
 
-	local peak
 	local trough
 	if qdisc.rate > qdisc.last then
-		peak = qdisc.rate
 		trough = (qdisc.last + qdisc.rate) * 0.5
 	else
-		peak = (qdisc.last + qdisc.rate) * 0.5
 		trough = qdisc.rate
 	end
 	qdisc.last = qdisc.rate
@@ -474,7 +471,7 @@ local function updateRateStatistics(qdisc)
 		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * trough
 	end
 
-	qdisc.assured = math.max(math.min(qdisc.lower, trough), qdisc.rate * 0.7)
+	qdisc.assured = math.max(math.min(qdisc.lower, trough), maximum)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
@@ -488,16 +485,15 @@ local function calculateDecreaseChance(qdisc, compared)
 		return
 	end
 
-	local devianceChance = 1
+	local decreaseChance = 0.5
 	if qdisc.deviance < compared.deviance then
-		devianceChance = (qdisc.deviance / compared.deviance)
+		decreaseChance = (qdisc.deviance / compared.deviance)
 	end
 	if qdisc.deviance < 1 then
-		devianceChance = devianceChance * qdisc.deviance
+		decreaseChance = decreaseChance * qdisc.deviance
 	end
 
-	local decreaseChance = 1
-	decreaseChance = decreaseChance * 0.5 + devianceChance * 0.5
+	decreaseChance = decreaseChance + 0.5
 
 	if compared.utilisation > 1 and qdisc.utilisation < 1 then
 		decreaseChance = decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation ^ 2
