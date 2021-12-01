@@ -461,7 +461,7 @@ local function updateRateStatistics(qdisc)
 	else
 		qdisc.maximum = maximumDecreaseResistance * qdisc.maximum + (1 - maximumDecreaseResistance) * maximum
 	end
-	
+
 	if not qdisc.last then
 		qdisc.last = qdisc.rate
 		qdisc.lower = qdisc.rate
@@ -586,7 +586,7 @@ local function calculateIncrease(qdisc)
 		attainedMultiplier = qdisc.maximum / qdisc.bandwidth
 	end
 
-	local idleMultiplier = 0.3
+	local idleMultiplier = 0.5
 	if qdisc.utilisation < 1 then
 		idleMultiplier = 1 - qdisc.utilisation * (1 - idleMultiplier)
 	end
@@ -609,7 +609,7 @@ local function calculateChange(qdisc)
 		return
 	end
 
-	if ping.clear > stableSeconds and math.random(1, 100) <= 75 * interval then
+	if ping.current < ping.limit and math.random(1, 100) <= 75 * interval then
 		calculateIncrease(qdisc)
 		return
 	end
