@@ -80,7 +80,7 @@ local function exit()
 	os.exit()
 end
 
-local function resetMssJitterClamp()
+local function firewallReload()
 	egress.mssJitterClamp = nil
 	ingress.mssJitterClamp = nil
 	if childPid then
@@ -972,7 +972,7 @@ local function main()
 	signal.signal(signal.SIGHUP, exit)
 	signal.signal(signal.SIGINT, exit)
 	signal.signal(signal.SIGTERM, exit)
-	signal.signal(signal.SIGUSR1, resetMssJitterClamp)
+	signal.signal(signal.SIGUSR1, firewallReload)
 
 	if not console then
 		daemonise()
