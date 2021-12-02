@@ -488,7 +488,7 @@ local function calculateDecreaseChance(qdisc, compared)
 
 	qdisc.decreaseChance = qdisc.decreaseChance + 0.5
 
-	if compared.utilisation > 1 and qdisc.utilisation < 1 then
+	if compared.utilisation > 1 and qdisc.utilisation < compared.utilisation then
 		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation ^ 2
 	end
 
@@ -509,6 +509,10 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	else
 		qdisc.decreaseChance = qdisc.decreaseChance * ping.delta / (ping.ceiling - ping.median)
+	end
+
+	if qdisc.assured > qdisc.bandwidth then
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
 	end
 
 	if ping.latent == interval then
