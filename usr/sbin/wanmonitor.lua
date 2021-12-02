@@ -315,7 +315,7 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.3f", egress.utilisation)
 		.. ";	"
-		.. string.format("%.2f", ping.baseline)
+		.. string.format("%.2f", ping.median)
 		.. ";	"
 		.. string.format("%.2f", ping.current)
 		.. ";	"
@@ -404,21 +404,20 @@ local function updateQdiscBandwidth(qdisc)
 end
 
 local function updatePingStatistics()
-	if not ping.baseline then
-		ping.baseline = rtt
+	if not ping.median then
 		ping.clear = 0
 		ping.latent = 0
 		ping.median = rtt
 		ping.step = interval
 	end
 
-	ping.delta = ping.current - ping.baseline
+	ping.delta = ping.current - ping.median
 
 	if #ping.times > 0 then
-		ping.baseline = streamingMedian(ping, ping.current, interval * 0.2)
+		streamingMedian(ping, ping.current, interval * 0.2)
 	end
-	ping.limit = ping.baseline + 5
-	ping.ceiling = ping.baseline + 70
+	ping.limit = ping.median + 5
+	ping.ceiling = ping.median + 70
 
 	if ping.current > ping.limit then
 		ping.clear = 0
@@ -437,10 +436,8 @@ local function updateRateStatistics(qdisc)
 		qdisc.utilisation = 0
 	end
 
-	local maximum
-	if ping.current < ping.limit then
-		maximum = qdisc.rate
-	else
+	local maximum = qdisc.rate
+	if ping.current > ping.limit then
 		maximum = qdisc.rate * 0.7
 	end
 
@@ -475,7 +472,7 @@ local function updateRateStatistics(qdisc)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
-	if not qdisc.bandwidth or ping.current < ping.limit then
+	if not qdisc.bandwidth or ping.current < ping.limit or learningSeconds > 0 then
 		qdisc.decreaseChance = nil
 		return
 	end
@@ -515,7 +512,7 @@ local function calculateDecreaseChance(qdisc, compared)
 	if ping.current > ping.ceiling then
 		decreaseChance = decreaseChance ^ 0.5
 	else
-		decreaseChance = decreaseChance * ping.delta / (ping.ceiling - ping.baseline)
+		decreaseChance = decreaseChance * ping.delta / (ping.ceiling - ping.median)
 	end
 
 	if ping.latent == interval then
