@@ -38,14 +38,13 @@ local logfile
 local mssJitterClamp
 local reconnect
 local rtt
-local lowerDecreaseResistance
-local lowerDecreaseStepTime
-local lowerIncreaseResistance
-local lowerIncreaseStepTime
+local floorDecreaseResistance
+local floorDecreaseStepTime
+local floorIncreaseResistance
+local floorIncreaseStepTime
 local maximumDecreaseResistance
 local maximumDecreaseStepTime
 local learningSeconds
-local stableSeconds
 local verbose
 
 local hostCount
@@ -448,11 +447,11 @@ local function updateRateStatistics(qdisc)
 	end
 
 	if not qdisc.last then
+		qdisc.floor = qdisc.rate
 		qdisc.last = qdisc.rate
-		qdisc.lower = qdisc.rate
 	end
 
-	qdisc.deviance = math.abs((qdisc.rate - qdisc.lower) / qdisc.lower)
+	qdisc.deviance = math.abs((qdisc.rate - qdisc.floor) / qdisc.floor)
 
 	local trough
 	if qdisc.rate > qdisc.last then
@@ -462,64 +461,59 @@ local function updateRateStatistics(qdisc)
 	end
 	qdisc.last = qdisc.rate
 
-	if trough < qdisc.lower then
-		qdisc.lower = lowerDecreaseResistance * qdisc.lower + (1 - lowerDecreaseResistance) * trough
+	if trough < qdisc.floor then
+		qdisc.floor = floorDecreaseResistance * qdisc.floor + (1 - floorDecreaseResistance) * trough
 	else
-		qdisc.lower = lowerIncreaseResistance * qdisc.lower + (1 - lowerIncreaseResistance) * trough
+		qdisc.floor = floorIncreaseResistance * qdisc.floor + (1 - floorIncreaseResistance) * trough
 	end
 
-	qdisc.assured = math.max(math.min(qdisc.lower, trough), maximum)
+	qdisc.assured = math.max(math.min(qdisc.floor, trough), maximum)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
-	if not qdisc.bandwidth or ping.current < ping.limit or learningSeconds > 0 then
+	if not qdisc.bandwidth or ping.current < ping.limit or learningSeconds > 0 or qdisc.assured > qdisc.bandwidth then
 		qdisc.decreaseChance = nil
 		return
 	end
 
-	if qdisc.assured > qdisc.bandwidth then
-		qdisc.decreaseChance = 0
-		return
-	end
+	qdisc.decreaseChance = 0.5
 
-	local decreaseChance = 0.5
 	if qdisc.deviance < compared.deviance then
-		decreaseChance = (qdisc.deviance / compared.deviance)
-	end
-	if qdisc.deviance < 1 then
-		decreaseChance = decreaseChance * qdisc.deviance
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.deviance / compared.deviance)
 	end
 
-	decreaseChance = decreaseChance + 0.5
+	if qdisc.deviance < 1 then
+		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.deviance
+	end
+
+	qdisc.decreaseChance = qdisc.decreaseChance + 0.5
 
 	if compared.utilisation > 1 and qdisc.utilisation < 1 then
-		decreaseChance = decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation ^ 2
+		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation ^ 2
 	end
 
 	local background = math.min(qdisc.bandwidth, qdisc.maximum) * 0.2
 	if qdisc.rate < background then
-		decreaseChance = decreaseChance * (qdisc.rate / background) ^ 0.5
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / background) ^ 0.5
 	end
 
-	if qdisc.rate < qdisc.lower then
-		decreaseChance = decreaseChance * 0.5 * (qdisc.rate / qdisc.lower)
+	if qdisc.rate < qdisc.floor then
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.5 * (qdisc.rate / qdisc.floor)
 	end
 
 	if qdisc.rate < qdisc.maximum then
-		decreaseChance = decreaseChance * (qdisc.rate / qdisc.maximum)
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.maximum)
 	end
 
 	if ping.current > ping.ceiling then
-		decreaseChance = decreaseChance ^ 0.5
+		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	else
-		decreaseChance = decreaseChance * ping.delta / (ping.ceiling - ping.median)
+		qdisc.decreaseChance = qdisc.decreaseChance * ping.delta / (ping.ceiling - ping.median)
 	end
 
 	if ping.latent == interval then
-		decreaseChance = decreaseChance * 0.5
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
 	end
-
-	qdisc.decreaseChance = decreaseChance
 end
 
 local function amplifyDecreaseChanceDifference(qdisc, compared)
@@ -898,13 +892,42 @@ local function initialise()
 		ingress.device = config.ingressDevice
 	end
 
-	interval = 0.5
-	lowerDecreaseStepTime = 2
-	lowerIncreaseStepTime = 0.5
+	floorDecreaseStepTime = 2
+	floorIncreaseStepTime = 0.5
+	learningSeconds = math.ceil(2 / interval)
 	maximumDecreaseStepTime = 60
-	mssJitterClamp = false
+	mssJitterClamp = true
 	rtt = 50
-	stableSeconds = 0.5
+
+	if config.floorDecreaseStepTime then
+		config.floorDecreaseStepTime = tonumber(config.floorDecreaseStepTime)
+		if not config.floorDecreaseStepTime or config.floorDecreaseStepTime <= 0 then
+			log("LOG_ERR", "Invalid floorDecreaseStepTime config value specified for " .. interface)
+			os.exit()
+		else
+			floorDecreaseStepTime = config.floorDecreaseStepTime
+		end
+	end
+
+	if config.floorIncreaseStepTime then
+		config.floorIncreaseStepTime = tonumber(config.floorIncreaseStepTime)
+		if not config.floorIncreaseStepTime or config.floorIncreaseStepTime <= 0 then
+			log("LOG_ERR", "Invalid floorIncreaseStepTime config value specified for " .. interface)
+			os.exit()
+		else
+			floorIncreaseStepTime = config.floorIncreaseStepTime
+		end
+	end
+
+	if config.maximumDecreaseStepTime then
+		config.maximumDecreaseStepTime = tonumber(config.maximumDecreaseStepTime)
+		if not config.maximumDecreaseStepTime or config.maximumDecreaseStepTime <= 0 then
+			log("LOG_ERR", "Invalid maximumDecreaseStepTime config value specified for " .. interface)
+			os.exit()
+		else
+			maximumDecreaseStepTime = config.maximumDecreaseStepTime
+		end
+	end
 
 	if config.mssJitterClamp then
 		config.mssJitterClamp = toboolean(config.mssJitterClamp)
@@ -926,19 +949,8 @@ local function initialise()
 		end
 	end
 
-	if config.stableSeconds then
-		config.stableSeconds = tonumber(config.stableSeconds)
-		if not config.stableSeconds or config.stableSeconds <= 0 then
-			log("LOG_ERR", "Invalid stableSeconds config value specified for " .. interface)
-			os.exit()
-		else
-			stableSeconds = config.stableSeconds
-		end
-	end
-
-	learningSeconds = math.ceil(2 / interval)
-	lowerDecreaseResistance = math.exp(math.log(0.5) / (lowerDecreaseStepTime / interval))
-	lowerIncreaseResistance = math.exp(math.log(0.5) / (lowerIncreaseStepTime / interval))
+	floorDecreaseResistance = math.exp(math.log(0.5) / (floorDecreaseStepTime / interval))
+	floorIncreaseResistance = math.exp(math.log(0.5) / (floorIncreaseStepTime / interval))
 	maximumDecreaseResistance = math.exp(math.log(0.5) / (maximumDecreaseStepTime / interval))
 end
 
