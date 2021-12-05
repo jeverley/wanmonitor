@@ -485,7 +485,11 @@ local function calculateDecreaseChance(qdisc, compared)
 	end
 
 	if qdisc.rate < qdisc.floor then
-		qdisc.decreaseChance = qdisc.decreaseChance * 0.5 * (qdisc.rate / qdisc.floor)
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.floor)
+	end
+
+	if qdisc.deviance < 0.05 then
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
 	end
 
 	if ping.current > ping.ceiling then
@@ -514,7 +518,7 @@ end
 local function calculateIncrease(qdisc)
 	local attainedMultiplier = qdisc.attained / qdisc.bandwidth
 	if qdisc.attained < qdisc.bandwidth then
-		attainedMultiplier = attainedMultiplier ^ 0.2
+		attainedMultiplier = attainedMultiplier ^ 0.5
 	end
 
 	local idleMultiplier = 0.7
