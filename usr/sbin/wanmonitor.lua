@@ -34,17 +34,19 @@ local dscp
 local hosts
 local interval
 local iptype
-local logfile
-local mssJitterClamp
-local reconnect
-local rtt
+local attainedDecreaseResistance
+local attainedDecreaseStepTime
+local attainedIncreaseResistance
+local attainedIncreaseStepTime
 local floorDecreaseResistance
 local floorDecreaseStepTime
 local floorIncreaseResistance
 local floorIncreaseStepTime
-local maximumDecreaseResistance
-local maximumDecreaseStepTime
 local learningSeconds
+local logfile
+local mssJitterClamp
+local reconnect
+local rtt
 local verbose
 
 local hostCount
@@ -80,7 +82,7 @@ local function exit()
 	os.exit()
 end
 
-local function firewallReload()
+local function firewallReloadEvent()
 	egress.mssJitterClamp = nil
 	ingress.mssJitterClamp = nil
 	if childPid then
@@ -328,9 +330,9 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.rate)
 		.. ";	"
-		.. string.format("%.2f", ingress.assured)
+		.. string.format("%.2f", ingress.attained)
 		.. ";	"
-		.. string.format("%.2f", egress.assured)
+		.. string.format("%.2f", egress.attained)
 		.. ";	"
 		.. string.format("%.2f", ingress.deviance)
 		.. ";	"
@@ -408,6 +410,10 @@ local function updatePingStatistics()
 		ping.latent = 0
 		ping.median = rtt
 		ping.step = interval
+
+		if ping.current < ping.median then
+			ping.median = (ping.current + ping.median) * 0.5
+		end
 	end
 
 	ping.delta = ping.current - ping.median
@@ -435,19 +441,8 @@ local function updateRateStatistics(qdisc)
 		qdisc.utilisation = 0
 	end
 
-	local maximum = qdisc.rate
-	if ping.current > ping.limit then
-		maximum = qdisc.rate * 0.7
-	end
-
-	if not qdisc.maximum or maximum > qdisc.maximum then
-		qdisc.maximum = maximum
-	else
-		qdisc.maximum = maximumDecreaseResistance * qdisc.maximum + (1 - maximumDecreaseResistance) * maximum
-	end
-
 	if not qdisc.last then
-		qdisc.floor = qdisc.rate
+		qdisc.floor = qdisc.rate * 0.9
 		qdisc.last = qdisc.rate
 	end
 
@@ -467,7 +462,20 @@ local function updateRateStatistics(qdisc)
 		qdisc.floor = floorIncreaseResistance * qdisc.floor + (1 - floorIncreaseResistance) * trough
 	end
 
-	qdisc.assured = math.max(math.min(qdisc.floor, trough), maximum)
+	local peak = qdisc.rate
+	if ping.current > ping.limit then
+		peak = qdisc.rate * 0.6
+	end
+
+	if not qdisc.attained then
+		qdisc.attained = peak
+	elseif peak < qdisc.attained then
+		qdisc.attained = attainedDecreaseResistance * qdisc.attained
+	else
+		qdisc.attained = attainedIncreaseResistance * qdisc.attained + (1 - attainedIncreaseResistance) * peak
+	end
+
+	qdisc.assured = math.max(math.min(qdisc.floor, trough), peak)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
@@ -488,11 +496,7 @@ local function calculateDecreaseChance(qdisc, compared)
 
 	qdisc.decreaseChance = qdisc.decreaseChance + 0.5
 
-	if compared.utilisation > 1 and qdisc.utilisation < compared.utilisation then
-		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.rate / qdisc.maximum / compared.utilisation ^ 2
-	end
-
-	local background = math.min(qdisc.bandwidth, qdisc.maximum) * 0.2
+	local background = math.min(qdisc.bandwidth, qdisc.attained) * 0.2
 	if qdisc.rate < background then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / background) ^ 0.5
 	end
@@ -501,14 +505,18 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance * 0.5 * (qdisc.rate / qdisc.floor)
 	end
 
-	if qdisc.rate < qdisc.maximum then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.maximum)
+	if qdisc.rate < qdisc.attained then
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.attained) ^ 0.5
 	end
 
 	if ping.current > ping.ceiling then
 		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	else
 		qdisc.decreaseChance = qdisc.decreaseChance * ping.delta / (ping.ceiling - ping.median)
+	end
+
+	if compared.utilisation > 1 and qdisc.utilisation < compared.utilisation then
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.utilisation / compared.utilisation) ^ 2
 	end
 
 	if qdisc.assured > qdisc.bandwidth then
@@ -525,24 +533,12 @@ local function amplifyDecreaseChanceDifference(qdisc, compared)
 		return
 	end
 
-	local amplify = 2
+	local amplify = 1
 	qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
 end
 
-local function calculateDecreaseChances()
-	if learningSeconds > 0 then
-		learningSeconds = learningSeconds - interval
-	end
-
-	calculateDecreaseChance(egress, ingress)
-	calculateDecreaseChance(ingress, egress)
-
-	amplifyDecreaseChanceDifference(egress, ingress)
-	amplifyDecreaseChanceDifference(ingress, egress)
-end
-
 local function calculateDecrease(qdisc)
-	qdisc.change = (qdisc.bandwidth - math.max(qdisc.maximum * 0.01, qdisc.assured)) * qdisc.decreaseChance * -1
+	qdisc.change = (qdisc.bandwidth - math.max(qdisc.attained * 0.1, qdisc.assured)) * qdisc.decreaseChance * -1
 
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
@@ -550,17 +546,17 @@ local function calculateDecrease(qdisc)
 end
 
 local function calculateIncrease(qdisc)
-	local attainedMultiplier = 1
-	if qdisc.maximum > qdisc.bandwidth then
-		attainedMultiplier = qdisc.maximum / qdisc.bandwidth
+	local attainedMultiplier = qdisc.attained / qdisc.bandwidth
+	if qdisc.attained < qdisc.bandwidth then
+		attainedMultiplier = attainedMultiplier ^ 0.2
 	end
 
-	local idleMultiplier = 0.5
+	local idleMultiplier = 0.7
 	if qdisc.utilisation < 1 then
 		idleMultiplier = 1 - qdisc.utilisation * (1 - idleMultiplier)
 	end
 
-	qdisc.change = qdisc.bandwidth * 0.05 * attainedMultiplier * idleMultiplier
+	qdisc.change = qdisc.bandwidth * 0.05 * attainedMultiplier * idleMultiplier * interval
 
 	if qdisc.change < 0.008 then
 		qdisc.change = 0
@@ -578,7 +574,7 @@ local function calculateChange(qdisc)
 		return
 	end
 
-	if ping.current < ping.limit and math.random(1, 100) <= 75 * interval then
+	if ping.current < ping.limit then
 		calculateIncrease(qdisc)
 		return
 	end
@@ -591,6 +587,10 @@ local function adjustSqm()
 		return
 	end
 
+	if learningSeconds > 0 then
+		learningSeconds = learningSeconds - interval
+	end
+
 	getQdisc(egress)
 	getQdisc(ingress)
 
@@ -598,7 +598,10 @@ local function adjustSqm()
 	updateRateStatistics(egress)
 	updateRateStatistics(ingress)
 
-	calculateDecreaseChances()
+	calculateDecreaseChance(egress, ingress)
+	calculateDecreaseChance(ingress, egress)
+	amplifyDecreaseChanceDifference(egress, ingress)
+	amplifyDecreaseChanceDifference(ingress, egress)
 
 	calculateChange(egress)
 	calculateChange(ingress)
@@ -896,12 +899,33 @@ local function initialise()
 		ingress.device = config.ingressDevice
 	end
 
+	attainedDecreaseStepTime = 60
+	attainedIncreaseStepTime = 1
 	floorDecreaseStepTime = 2
 	floorIncreaseStepTime = 0.5
-	learningSeconds = math.ceil(2 / interval)
-	maximumDecreaseStepTime = 60
+	learningSeconds = 2
 	mssJitterClamp = true
 	rtt = 50
+
+	if config.attainedDecreaseStepTime then
+		config.attainedDecreaseStepTime = tonumber(config.attainedDecreaseStepTime)
+		if not config.attainedDecreaseStepTime or config.attainedDecreaseStepTime <= 0 then
+			log("LOG_ERR", "Invalid attainedDecreaseStepTime config value specified for " .. interface)
+			os.exit()
+		else
+			attainedDecreaseStepTime = config.attainedDecreaseStepTime
+		end
+	end
+
+	if config.attainedIncreaseStepTime then
+		config.attainedIncreaseStepTime = tonumber(config.attainedIncreaseStepTime)
+		if not config.attainedIncreaseStepTime or config.attainedIncreaseStepTime <= 0 then
+			log("LOG_ERR", "Invalid attainedIncreaseStepTime config value specified for " .. interface)
+			os.exit()
+		else
+			attainedIncreaseStepTime = config.attainedIncreaseStepTime
+		end
+	end
 
 	if config.floorDecreaseStepTime then
 		config.floorDecreaseStepTime = tonumber(config.floorDecreaseStepTime)
@@ -920,16 +944,6 @@ local function initialise()
 			os.exit()
 		else
 			floorIncreaseStepTime = config.floorIncreaseStepTime
-		end
-	end
-
-	if config.maximumDecreaseStepTime then
-		config.maximumDecreaseStepTime = tonumber(config.maximumDecreaseStepTime)
-		if not config.maximumDecreaseStepTime or config.maximumDecreaseStepTime <= 0 then
-			log("LOG_ERR", "Invalid maximumDecreaseStepTime config value specified for " .. interface)
-			os.exit()
-		else
-			maximumDecreaseStepTime = config.maximumDecreaseStepTime
 		end
 	end
 
@@ -953,9 +967,10 @@ local function initialise()
 		end
 	end
 
+	attainedDecreaseResistance = math.exp(math.log(0.5) / (attainedDecreaseStepTime / interval))
+	attainedIncreaseResistance = math.exp(math.log(0.5) / (attainedIncreaseStepTime / interval))
 	floorDecreaseResistance = math.exp(math.log(0.5) / (floorDecreaseStepTime / interval))
 	floorIncreaseResistance = math.exp(math.log(0.5) / (floorIncreaseStepTime / interval))
-	maximumDecreaseResistance = math.exp(math.log(0.5) / (maximumDecreaseStepTime / interval))
 end
 
 local function daemonise()
@@ -972,7 +987,7 @@ local function main()
 	signal.signal(signal.SIGHUP, exit)
 	signal.signal(signal.SIGINT, exit)
 	signal.signal(signal.SIGTERM, exit)
-	signal.signal(signal.SIGUSR1, firewallReload)
+	signal.signal(signal.SIGUSR1, firewallReloadEvent)
 
 	if not console then
 		daemonise()
