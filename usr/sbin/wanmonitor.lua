@@ -18,14 +18,23 @@ if not table.unpack then
 	table.unpack = unpack
 end
 
+local childPid
 local egress
 local device
+local hostCount
 local ingress
 local interface
+local intervalEpoch
 local pid
-local childPid
 local pidFile
 local ping
+local pingStatus
+local previousEpoch
+local previousRxBytes
+local previousTxBytes
+local responseCount
+local retries
+local retriesRemaining
 local statusFile
 
 local autorate
@@ -34,6 +43,10 @@ local dscp
 local hosts
 local interval
 local iptype
+local logfile
+local reconnect
+local verbose
+
 local attainedDecreaseResistance
 local attainedDecreaseStepTime
 local attainedIncreaseResistance
@@ -43,21 +56,8 @@ local floorDecreaseStepTime
 local floorIncreaseResistance
 local floorIncreaseStepTime
 local learningSeconds
-local logfile
 local mssJitterClamp
-local reconnect
 local rtt
-local verbose
-
-local hostCount
-local intervalEpoch
-local pingStatus
-local previousEpoch
-local previousRxBytes
-local previousTxBytes
-local responseCount
-local retries
-local retriesRemaining
 
 local function log(priority, message)
 	if console then
@@ -284,10 +284,10 @@ local function adjustmentLog()
 	end
 
 	if
-		not (ingress.change and ingress.change ~= 0)
+		not verbose
+		and not (ingress.change and ingress.change ~= 0)
 		and not (egress.change and egress.change ~= 0)
 		and not (ping.current and ping.limit and ping.current > ping.limit)
-		and not verbose
 	then
 		return
 	end
@@ -330,26 +330,9 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.rate)
 		.. ";	"
-		.. string.format("%.2f", ingress.attained)
+		.. string.format("%.2f", ingressDecreaseChance)
 		.. ";	"
-		.. string.format("%.2f", egress.attained)
-		.. ";	"
-		.. string.format("%.2f", ingress.deviance)
-		.. ";	"
-		.. string.format(
-			"%.2f",
-			egress.deviance
-		)
-		.. ";	"
-		.. string.format(
-			"%.2f",
-			ingressDecreaseChance
-		)
-		.. ";	"
-		.. string.format(
-			"%.2f",
-			egressDecreaseChance
-		)
+		.. string.format("%.2f", egressDecreaseChance)
 		.. ";"
 
 	if console then
@@ -484,7 +467,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		return
 	end
 
-	qdisc.decreaseChance = 0.5
+	qdisc.decreaseChance = 0.2
 
 	if qdisc.deviance < compared.deviance then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.deviance / compared.deviance)
@@ -494,7 +477,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.deviance
 	end
 
-	qdisc.decreaseChance = qdisc.decreaseChance + 0.5
+	qdisc.decreaseChance = qdisc.decreaseChance + 0.8
 
 	local background = math.min(qdisc.bandwidth, qdisc.attained) * 0.2
 	if qdisc.rate < background then
@@ -503,10 +486,6 @@ local function calculateDecreaseChance(qdisc, compared)
 
 	if qdisc.rate < qdisc.floor then
 		qdisc.decreaseChance = qdisc.decreaseChance * 0.5 * (qdisc.rate / qdisc.floor)
-	end
-
-	if qdisc.rate < qdisc.attained then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.attained) ^ 0.5
 	end
 
 	if ping.current > ping.ceiling then
@@ -519,22 +498,9 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.utilisation / compared.utilisation) ^ 2
 	end
 
-	if qdisc.assured > qdisc.bandwidth then
-		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
-	end
-
 	if ping.latent == interval then
 		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
 	end
-end
-
-local function amplifyDecreaseChanceDifference(qdisc, compared)
-	if not qdisc.decreaseChance or not compared.decreaseChance or qdisc.decreaseChance >= compared.decreaseChance then
-		return
-	end
-
-	local amplify = 1
-	qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.decreaseChance / compared.decreaseChance) ^ amplify
 end
 
 local function calculateDecrease(qdisc)
@@ -600,8 +566,6 @@ local function adjustSqm()
 
 	calculateDecreaseChance(egress, ingress)
 	calculateDecreaseChance(ingress, egress)
-	amplifyDecreaseChanceDifference(egress, ingress)
-	amplifyDecreaseChanceDifference(ingress, egress)
 
 	calculateChange(egress)
 	calculateChange(ingress)
