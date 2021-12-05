@@ -522,7 +522,7 @@ local function calculateIncrease(qdisc)
 		idleMultiplier = 1 - qdisc.utilisation * (1 - idleMultiplier)
 	end
 
-	qdisc.change = qdisc.bandwidth * 0.05 * attainedMultiplier * idleMultiplier * interval
+	qdisc.change = qdisc.bandwidth * 0.1 * attainedMultiplier * idleMultiplier * interval
 
 	if qdisc.change < 0.008 then
 		qdisc.change = 0
