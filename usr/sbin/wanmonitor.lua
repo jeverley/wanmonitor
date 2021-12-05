@@ -488,10 +488,6 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.floor)
 	end
 
-	if qdisc.deviance < 0.05 then
-		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
-	end
-
 	if ping.current > ping.ceiling then
 		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	else
