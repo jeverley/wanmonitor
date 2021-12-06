@@ -34,7 +34,6 @@ local previousRxBytes
 local previousTxBytes
 local responseCount
 local retries
-local retriesRemaining
 local statusFile
 
 local autorate
@@ -465,7 +464,7 @@ local function updateRateStatistics(qdisc)
 
 	local peak = qdisc.rate
 	if ping.current > ping.limit then
-		peak = qdisc.rate * 0.6
+		peak = qdisc.rate * 0.7
 	end
 
 	if not qdisc.attained then
@@ -652,7 +651,7 @@ local function processPingOutput(line)
 		statisticsInterval()
 		ping.times = {}
 		responseCount = 0
-		retriesRemaining = retries
+		retries = 0
 	elseif string.find(line, "Adding host .* failed: ") then
 		log("LOG_WARNING", line)
 		hostCount = hostCount - 1
@@ -764,7 +763,6 @@ local function initialise()
 	dscp = "CS6"
 	interval = 0.5
 	iptype = nil
-	retries = 2
 	reconnect = false
 	autorate = false
 	verbose = false
@@ -974,8 +972,8 @@ local function main()
 
 	log("LOG_NOTICE", "Started for " .. interface .. " (" .. device .. ")")
 
-	retriesRemaining = retries
-	while retriesRemaining > 0 do
+	retries = 0
+	while retries < 2 do
 		pingLoop()
 		if pingStatus == 4 then
 			interfaceReconnect(interface)
@@ -984,7 +982,7 @@ local function main()
 			break
 		end
 		if pingStatus == 2 then
-			retriesRemaining = retriesRemaining - 1
+			retries = retries + 1
 			unistd.sleep(1)
 		end
 	end
