@@ -464,7 +464,7 @@ local function updateRateStatistics(qdisc)
 
 	local peak = qdisc.rate
 	if ping.current > ping.limit then
-		peak = qdisc.rate * 0.7
+		peak = qdisc.rate * 0.55
 	end
 
 	if not qdisc.attained then
