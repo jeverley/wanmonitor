@@ -55,7 +55,6 @@ local floorDecreaseResistance
 local floorDecreaseStepTime
 local floorIncreaseResistance
 local floorIncreaseStepTime
-local learningSeconds
 local mssJitterClamp
 local rtt
 
@@ -64,6 +63,7 @@ local function log(priority, message)
 		print(message)
 		return
 	end
+
 	syslog.openlog("wanmonitor", syslog.LOG_PID, syslog.LOG_DAEMON)
 	syslog.syslog(syslog[priority], message)
 	syslog.closelog()
@@ -73,6 +73,7 @@ local function cleanup()
 	if childPid then
 		signal.kill(childPid, signal.SIGKILL)
 	end
+
 	os.remove(pidFile)
 	os.remove(statusFile)
 end
@@ -85,6 +86,7 @@ end
 local function firewallReloadEvent()
 	egress.mssJitterClamp = nil
 	ingress.mssJitterClamp = nil
+
 	if childPid then
 		signal.kill(childPid, signal.SIGKILL)
 		pingStatus = 3
@@ -101,17 +103,21 @@ local function streamingMedian(persist, observation, minimumStep)
 		persist.median = observation
 		persist.step = math.max(math.abs(observation / 2), 1)
 	end
+
 	if minimumStep and persist.step < minimumStep then
 		persist.step = minimumStep
 	end
+
 	if persist.median > observation then
 		persist.median = persist.median - persist.step
 	elseif persist.median < observation then
 		persist.median = persist.median + persist.step
 	end
+
 	if math.abs(observation - persist.median) < persist.step then
 		persist.step = persist.step / 2
 	end
+
 	return persist.median
 end
 
@@ -126,6 +132,7 @@ local function writeFile(file, content, mode)
 	if not mode then
 		mode = "wb"
 	end
+	
 	local fd = io.open(file, mode)
 	fd:write(content)
 	fd:close()
@@ -196,9 +203,10 @@ end
 
 local function firewallZoneConfig(zone)
 	local zones = uciGet("firewall", nil, nil, "zone")
-	if not zones then
+	if not zones or not zone then
 		return
 	end
+
 	for k, v in pairs(zones) do
 		if v.name == zone then
 			return v
@@ -330,9 +338,19 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.2f", egress.rate)
 		.. ";	"
-		.. string.format("%.2f", ingressDecreaseChance)
+		.. string.format("%.2f", ingress.floor)
 		.. ";	"
-		.. string.format("%.2f", egressDecreaseChance)
+		.. string.format("%.2f", egress.floor)
+		.. ";	"
+		.. string.format(
+			"%.2f",
+			ingressDecreaseChance
+		)
+		.. ";	"
+		.. string.format(
+			"%.2f",
+			egressDecreaseChance
+		)
 		.. ";"
 
 	if console then
@@ -462,36 +480,40 @@ local function updateRateStatistics(qdisc)
 end
 
 local function calculateDecreaseChance(qdisc, compared)
-	if not qdisc.bandwidth or ping.current < ping.limit or learningSeconds > 0 or qdisc.assured > qdisc.bandwidth then
+	if not qdisc.bandwidth or ping.current < ping.limit or qdisc.assured > qdisc.bandwidth then
 		qdisc.decreaseChance = nil
 		return
 	end
 
-	qdisc.decreaseChance = 0.2
+	qdisc.decreaseChance = 0.5
 
 	if qdisc.deviance < compared.deviance then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.deviance / compared.deviance)
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.deviance / compared.deviance) ^ 2
 	end
 
 	if qdisc.deviance < 1 then
 		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.deviance
 	end
 
-	qdisc.decreaseChance = qdisc.decreaseChance + 0.8
+	qdisc.decreaseChance = qdisc.decreaseChance + 0.5
 
-	local background = math.min(qdisc.bandwidth, qdisc.attained) * 0.2
+	local background = math.min(qdisc.bandwidth, qdisc.attained) * 0.1
 	if qdisc.rate < background then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / background) ^ 0.5
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / background)
 	end
 
 	if qdisc.rate < qdisc.floor then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.floor)
 	end
 
+	if qdisc.rate < qdisc.attained then
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.attained) ^ 0.5
+	end
+
 	if ping.current > ping.ceiling then
 		qdisc.decreaseChance = qdisc.decreaseChance ^ 0.5
 	else
-		qdisc.decreaseChance = qdisc.decreaseChance * ping.delta / (ping.ceiling - ping.median)
+		qdisc.decreaseChance = qdisc.decreaseChance * (ping.delta / (ping.ceiling - ping.median)) ^ 2
 	end
 
 	if compared.utilisation > 1 and qdisc.utilisation < compared.utilisation then
@@ -499,7 +521,7 @@ local function calculateDecreaseChance(qdisc, compared)
 	end
 
 	if ping.latent == interval then
-		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.95
 	end
 end
 
@@ -535,7 +557,7 @@ local function calculateChange(qdisc)
 		return
 	end
 
-	if qdisc.decreaseChance and qdisc.decreaseChance >= 0.01 then
+	if qdisc.decreaseChance then
 		calculateDecrease(qdisc)
 		return
 	end
@@ -551,10 +573,6 @@ end
 local function adjustSqm()
 	if not autorate or not egress.rate or not ingress.rate then
 		return
-	end
-
-	if learningSeconds > 0 then
-		learningSeconds = learningSeconds - interval
 	end
 
 	getQdisc(egress)
@@ -863,11 +881,10 @@ local function initialise()
 		ingress.device = config.ingressDevice
 	end
 
-	attainedDecreaseStepTime = 60
+	attainedDecreaseStepTime = 30
 	attainedIncreaseStepTime = 1
 	floorDecreaseStepTime = 2
 	floorIncreaseStepTime = 0.5
-	learningSeconds = 2
 	mssJitterClamp = true
 	rtt = 50
 
