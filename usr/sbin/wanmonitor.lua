@@ -485,7 +485,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		return
 	end
 
-	qdisc.decreaseChance = 0.5
+	qdisc.decreaseChance = 0.3
 
 	if qdisc.deviance < compared.deviance then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.deviance / compared.deviance) ^ 2
@@ -495,17 +495,13 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.deviance
 	end
 
-	qdisc.decreaseChance = qdisc.decreaseChance + 0.5
+	qdisc.decreaseChance = qdisc.decreaseChance + 0.7
 
 	local background = math.min(qdisc.bandwidth, qdisc.attained) * 0.1
 	if qdisc.rate < background then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / background)
 	end
-
-	if qdisc.rate < qdisc.floor then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.floor)
-	end
-
+	
 	if qdisc.rate < qdisc.attained then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.attained) ^ 0.5
 	end
