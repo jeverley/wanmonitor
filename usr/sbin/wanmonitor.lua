@@ -541,7 +541,12 @@ local function calculateIncrease(qdisc)
 		idleMultiplier = 1 - qdisc.utilisation * (1 - idleMultiplier)
 	end
 
-	qdisc.change = qdisc.bandwidth * 0.1 * attainedMultiplier * idleMultiplier * interval
+	local pingMultiplier = 1
+	if ping.current > ping.median then
+		pingMultiplier = 0.5
+	end
+
+	qdisc.change = qdisc.bandwidth * 0.1 * attainedMultiplier * idleMultiplier * pingMultiplier * interval
 
 	if qdisc.change < 0.008 then
 		qdisc.change = 0
