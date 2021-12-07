@@ -521,9 +521,7 @@ local function calculateDecreaseChance(qdisc, compared)
 end
 
 local function calculateDecrease(qdisc)
-	local minimum = math.max(qdisc.attained * 0.1, qdisc.assured)
-	local new = minimum + (math.min(minimum * 100, qdisc.bandwidth) - minimum) * (1 - qdisc.decreaseChance)
-	qdisc.change = (qdisc.bandwidth - new) * -1
+	qdisc.change = (qdisc.bandwidth - math.max(qdisc.attained * 0.1, qdisc.assured)) * qdisc.decreaseChance * -1
 	
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
@@ -543,10 +541,10 @@ local function calculateIncrease(qdisc)
 
 	local pingMultiplier = 1
 	if ping.current > ping.median then
-		pingMultiplier = 0.5
+		pingMultiplier = 0.2
 	end
 
-	qdisc.change = qdisc.bandwidth * 0.1 * attainedMultiplier * idleMultiplier * pingMultiplier * interval
+	qdisc.change = qdisc.bandwidth * 0.2 * attainedMultiplier * idleMultiplier * pingMultiplier * interval
 
 	if qdisc.change < 0.008 then
 		qdisc.change = 0
