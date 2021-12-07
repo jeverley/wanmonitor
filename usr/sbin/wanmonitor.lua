@@ -203,7 +203,7 @@ end
 local function firewallZoneConfig(zone)
 	local zones = uciGet("firewall", nil, nil, "zone")
 	if not zones or not zone then
-		return
+		return zones
 	end
 
 	for k, v in pairs(zones) do
@@ -484,7 +484,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		return
 	end
 
-	qdisc.decreaseChance = 0.3
+	qdisc.decreaseChance = 0.4
 
 	if qdisc.deviance < compared.deviance then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.deviance / compared.deviance) ^ 2
@@ -494,7 +494,7 @@ local function calculateDecreaseChance(qdisc, compared)
 		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.deviance
 	end
 
-	qdisc.decreaseChance = qdisc.decreaseChance + 0.7
+	qdisc.decreaseChance = qdisc.decreaseChance + 0.6
 
 	local background = math.min(qdisc.bandwidth, qdisc.attained) * 0.1
 	if qdisc.rate < background then
@@ -521,8 +521,10 @@ local function calculateDecreaseChance(qdisc, compared)
 end
 
 local function calculateDecrease(qdisc)
-	qdisc.change = (qdisc.bandwidth - math.max(qdisc.attained * 0.1, qdisc.assured)) * qdisc.decreaseChance * -1
-
+	local minimum = math.max(qdisc.attained * 0.1, qdisc.assured)
+	local new = minimum + (math.min(minimum * 100, qdisc.bandwidth) - minimum) * (1 - qdisc.decreaseChance)
+	qdisc.change = (qdisc.bandwidth - new) * -1
+	
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
 	end
@@ -877,7 +879,7 @@ local function initialise()
 
 	attainedDecreaseStepTime = 30
 	attainedIncreaseStepTime = 1
-	floorDecreaseStepTime = 2
+	floorDecreaseStepTime = 1
 	floorIncreaseStepTime = 0.5
 	mssJitterClamp = true
 	rtt = 50
