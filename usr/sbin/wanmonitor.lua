@@ -880,7 +880,7 @@ local function initialise()
 	attainedDecreaseStepTime = 30
 	attainedIncreaseStepTime = 1
 	floorDecreaseStepTime = 1
-	floorIncreaseStepTime = 0.5
+	floorIncreaseStepTime = 1
 	mssJitterClamp = true
 	rtt = 50
 
