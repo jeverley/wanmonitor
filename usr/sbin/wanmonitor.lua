@@ -131,7 +131,7 @@ local function writeFile(file, content, mode)
 	if not mode then
 		mode = "wb"
 	end
-	
+
 	local fd = io.open(file, mode)
 	fd:write(content)
 	fd:close()
@@ -486,12 +486,12 @@ local function calculateDecreaseChance(qdisc, compared)
 
 	qdisc.decreaseChance = 0.4
 
-	if qdisc.deviance < compared.deviance then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.deviance / compared.deviance) ^ 2
-	end
-
 	if qdisc.deviance < 1 then
 		qdisc.decreaseChance = qdisc.decreaseChance * qdisc.deviance
+	end
+
+	if qdisc.deviance < compared.deviance then
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.deviance / compared.deviance) ^ 2
 	end
 
 	qdisc.decreaseChance = qdisc.decreaseChance + 0.6
@@ -500,7 +500,7 @@ local function calculateDecreaseChance(qdisc, compared)
 	if qdisc.rate < background then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / background)
 	end
-	
+
 	if qdisc.rate < qdisc.attained then
 		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.rate / qdisc.attained) ^ 0.5
 	end
@@ -521,8 +521,8 @@ local function calculateDecreaseChance(qdisc, compared)
 end
 
 local function calculateDecrease(qdisc)
-	qdisc.change = (qdisc.bandwidth - math.max(qdisc.attained * 0.1, qdisc.assured)) * qdisc.decreaseChance * -1
-	
+	qdisc.change = (qdisc.bandwidth - math.max(qdisc.attained * 0.1, qdisc.assured * 0.9)) * qdisc.decreaseChance * -1
+
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
 	end
@@ -534,7 +534,7 @@ local function calculateIncrease(qdisc)
 		attainedMultiplier = attainedMultiplier ^ 0.5
 	end
 
-	local idleMultiplier = 0.7
+	local idleMultiplier = 0.9
 	if qdisc.utilisation < 1 then
 		idleMultiplier = 1 - qdisc.utilisation * (1 - idleMultiplier)
 	end
