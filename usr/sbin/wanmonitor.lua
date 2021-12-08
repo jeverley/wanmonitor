@@ -521,7 +521,7 @@ local function calculateDecreaseChance(qdisc, compared)
 end
 
 local function calculateDecrease(qdisc)
-	qdisc.change = (qdisc.bandwidth - math.max(qdisc.attained * 0.1, qdisc.assured * 0.9)) * qdisc.decreaseChance * -1
+	qdisc.change = (qdisc.bandwidth - math.max(qdisc.attained * 0.1, qdisc.assured * 0.9, 100)) * qdisc.decreaseChance * -1
 
 	if qdisc.change > -0.008 then
 		qdisc.change = 0
