@@ -32,6 +32,8 @@ local pingStatus
 local previousEpoch
 local previousRxBytes
 local previousTxBytes
+local previousTxErrors
+local previousRxErrors
 local responseCount
 local retries
 local statusFile
@@ -54,6 +56,8 @@ local floorDecreaseResistance
 local floorDecreaseStepTime
 local floorIncreaseResistance
 local floorIncreaseStepTime
+local minimumPingIncreaseResistance
+local minimumPingIncreaseStepTime
 local mssJitterClamp
 local rtt
 
@@ -323,6 +327,8 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.3f", egress.utilisation)
 		.. ";	"
+		.. string.format("%.2f", ping.minimum)
+		.. ";	"
 		.. string.format("%.2f", ping.median)
 		.. ";	"
 		.. string.format("%.2f", ping.current)
@@ -409,11 +415,13 @@ local function updatePingStatistics()
 		ping.clear = 0
 		ping.latent = 0
 		ping.median = rtt
+		ping.minimum = ping.current
 		ping.step = interval
 
 		if ping.current < ping.median then
 			ping.median = (ping.current + ping.median) * 0.5
 		end
+		ping.stable = ping.median
 	end
 
 	ping.delta = ping.current - ping.median
@@ -423,6 +431,12 @@ local function updatePingStatistics()
 	end
 	ping.limit = ping.median + 5
 	ping.ceiling = ping.median + 70
+
+	if ping.current < ping.minimum then
+		ping.minimum = ping.current
+	else
+		ping.minimum = minimumPingIncreaseResistance * ping.minimum + (1 - minimumPingIncreaseResistance) * ping.median
+	end
 
 	if ping.current > ping.limit then
 		ping.clear = 0
@@ -512,11 +526,19 @@ local function calculateDecreaseChance(qdisc, compared)
 	end
 
 	if compared.utilisation > 1 and qdisc.utilisation < compared.utilisation then
-		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.utilisation / compared.utilisation) ^ 2
+		qdisc.decreaseChance = qdisc.decreaseChance * (qdisc.utilisation / compared.utilisation) ^ 3
+	end
+
+	if compared.utilisation > 1 and qdisc.rate < qdisc.attained then
+		qdisc.decreaseChance = qdisc.decreaseChance * 0.5
 	end
 
 	if ping.latent == interval then
 		qdisc.decreaseChance = qdisc.decreaseChance * 0.95
+	end
+
+	if qdisc.errors > 0 or compared.errors > 0 then
+		qdisc.decreaseChance = 0.5
 	end
 end
 
@@ -539,9 +561,9 @@ local function calculateIncrease(qdisc)
 		idleMultiplier = 1 - qdisc.utilisation * (1 - idleMultiplier)
 	end
 
-	local pingMultiplier = 1
-	if ping.current > ping.median then
-		pingMultiplier = 0.2
+	local pingMultiplier = 0.2
+	if ping.current < ping.median then
+		pingMultiplier = pingMultiplier + (1 - pingMultiplier) * (ping.median - ping.minimum + ping.delta) / (ping.median - ping.minimum)
 	end
 
 	qdisc.change = qdisc.bandwidth * 0.2 * attainedMultiplier * idleMultiplier * pingMultiplier * interval
@@ -602,6 +624,9 @@ local function statisticsInterval()
 	local rxBytes = tonumber(readFile("/sys/class/net/" .. device .. "/statistics/rx_bytes"))
 	intervalEpoch = epoch()
 
+	local txErrors = tonumber(readFile("/sys/class/net/" .. device .. "/statistics/tx_errors"))
+	local rxErrors = tonumber(readFile("/sys/class/net/" .. device .. "/statistics/rx_errors"))
+
 	if not txBytes or not rxBytes then
 		log("LOG_ERR", "Cannot read tx/rx rates for " .. interface .. " (" .. device .. ")")
 		exit()
@@ -611,10 +636,14 @@ local function statisticsInterval()
 		local timeDelta = intervalEpoch - previousEpoch
 		egress.rate = (txBytes - previousTxBytes) * 0.008 / timeDelta
 		ingress.rate = (rxBytes - previousRxBytes) * 0.008 / timeDelta
+		egress.errors = txErrors - previousTxErrors
+		ingress.errors = rxErrors - previousRxErrors
 	end
 
 	previousTxBytes = txBytes
 	previousRxBytes = rxBytes
+	previousTxErrors = txErrors
+	previousRxErrors = rxErrors
 	previousEpoch = intervalEpoch
 
 	if #ping.times > 0 then
@@ -696,6 +725,8 @@ local function pingLoop()
 	pingStatus = nil
 	previousRxBytes = nil
 	previousTxBytes = nil
+	previousTxErrors = nil
+	previousRxErrors = nil
 	previousEpoch = nil
 
 	local fd = io.popen(
@@ -884,6 +915,7 @@ local function initialise()
 	attainedIncreaseStepTime = 1
 	floorDecreaseStepTime = 1
 	floorIncreaseStepTime = 1
+	minimumPingIncreaseStepTime = 120
 	mssJitterClamp = true
 	rtt = 50
 
@@ -951,6 +983,7 @@ local function initialise()
 	attainedIncreaseResistance = math.exp(math.log(0.5) / (attainedIncreaseStepTime / interval))
 	floorDecreaseResistance = math.exp(math.log(0.5) / (floorDecreaseStepTime / interval))
 	floorIncreaseResistance = math.exp(math.log(0.5) / (floorIncreaseStepTime / interval))
+	minimumPingIncreaseResistance = math.exp(math.log(0.5) / (minimumPingIncreaseStepTime / interval))
 end
 
 local function daemonise()
