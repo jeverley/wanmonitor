@@ -327,8 +327,6 @@ local function adjustmentLog()
 		.. ";	"
 		.. string.format("%.3f", egress.utilisation)
 		.. ";	"
-		.. string.format("%.2f", ping.minimum)
-		.. ";	"
 		.. string.format("%.2f", ping.median)
 		.. ";	"
 		.. string.format("%.2f", ping.current)
@@ -563,7 +561,7 @@ local function calculateIncrease(qdisc)
 
 	local pingMultiplier = 0.2
 	if ping.current < ping.median then
-		pingMultiplier = pingMultiplier + (1 - pingMultiplier) * (ping.median - ping.minimum + ping.delta) / (ping.median - ping.minimum)
+		pingMultiplier = pingMultiplier + (1 - pingMultiplier) * 1 - ((ping.median - ping.minimum + ping.delta) / (ping.median - ping.minimum))
 	end
 
 	qdisc.change = qdisc.bandwidth * 0.2 * attainedMultiplier * idleMultiplier * pingMultiplier * interval
